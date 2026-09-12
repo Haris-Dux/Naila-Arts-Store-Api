@@ -10,7 +10,7 @@ services:
       target: runtime
     container_name: store-app
     ports:
-      - '3000:3000'
+      - '4000:4000'
     env_file:
       - .env
     environment:
@@ -35,7 +35,7 @@ services:
           'CMD',
           'node',
           '-e',
-          "fetch('http://127.0.0.1:3000/health/liveness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:4000/health/liveness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s

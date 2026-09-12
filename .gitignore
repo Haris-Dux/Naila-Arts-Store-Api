@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.local
+*.tsbuildinfo
+
+# Uploaded images in local development, and the suite's scratch directory.
+# In production this lives on a mounted volume outside the working tree.
+var/

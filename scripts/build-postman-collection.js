@@ -814,7 +814,7 @@ Every API the customer-facing store (website or app) integrates — nothing admi
   },
   item: [storeSetup, catalogue, account, orders, payment, cancelling, guest, tracking, sessions],
   variable: [
-    ['baseUrl', 'http://localhost:3000/api/v1'],
+    ['baseUrl', 'http://localhost:4000/api/v1'],
     ['customerEmail', ''],
     ['customerPassword', 'StrongP@ssw0rd!'],
     ['newPassword', 'N3w-StrongP@ss!'],

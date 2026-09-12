@@ -7,12 +7,12 @@ import * as Joi from 'joi';
  */
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'test', 'production').required(),
-  PORT: Joi.number().port().default(3000),
+  PORT: Joi.number().port().default(4000),
   // The only sites allowed to call the API from a browser. Explicit origins, not
   // "*": the API sends credentials (the guest-checkout cookie), and browsers
   // refuse a credentialed response to a wildcard origin.
   CORS_ORIGINS: Joi.string()
-    .default('http://localhost:3000')
+    .default('http://localhost:4000')
     .custom((value: string, helpers) => {
       const origins = value
         .split(',')
@@ -26,7 +26,7 @@ export const envValidationSchema = Joi.object({
         'CORS_ORIGINS must be a comma-separated list of origins such as https://nailaarts.pk — ' +
         'scheme and host only, no paths and no "*"',
     }),
-  PUBLIC_URL: Joi.string().uri().default('http://localhost:3000'),
+  PUBLIC_URL: Joi.string().uri().default('http://localhost:4000'),
   // Distinct from JWT_SECRET: one secret, one purpose, so rotating the cookie
   // signing key does not invalidate every access token.
   COOKIE_SECRET: Joi.string().min(32).required().messages({

@@ -23,9 +23,9 @@ start the app: Mongoose creates the collections and builds every index the
 schemas declare, and the first administrator is created from `SEED_ADMIN_EMAIL`
 / `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_NAME`.
 
-- API: `http://localhost:3000/api/v1`
-- Swagger (non-production only): `http://localhost:3000/docs`
-- Health: `http://localhost:3000/health` — unversioned and unprefixed on purpose
+- API: `http://localhost:4000/api/v1`
+- Swagger (non-production only): `http://localhost:4000/docs`
+- Health: `http://localhost:4000/health` — unversioned and unprefixed on purpose
 
 **Email** goes out through the shop's Hostinger mailbox (`smtp.hostinger.com`,
 port 465 with SSL). Fill in the `CHANGE_ME` values in `.env`: `SMTP_USER` and
