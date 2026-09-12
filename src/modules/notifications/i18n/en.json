@@ -1,0 +1,86 @@
+{
+  "common": {
+    "greeting": "Hello {{name}},",
+    "signoff": "Thank you for shopping with {{storeName}}.",
+    "supportLead": "Questions? Write to us at",
+    "footerNote": "You're receiving this email because of a recent order or account activity at {{storeName}}.",
+    "orderNumber": "Order number",
+    "total": "Total",
+    "size": "Size",
+    "product": "Product",
+    "quantity": "Qty",
+    "unitPrice": "Unit price",
+    "lineTotal": "Line total"
+  },
+  "orderPlaced": {
+    "subject": "We've received your order {{orderNumber}}",
+    "status": "Order received",
+    "preheader": "Thank you for your order {{orderNumber}}. Here's what you chose.",
+    "heading": "Your order is in",
+    "intro": "Thanks for your order. We'll email you again as soon as your payment clears.",
+    "nextSteps": "Nothing to do right now — we'll take it from here."
+  },
+  "orderPaid": {
+    "subject": "Payment received for order {{orderNumber}}",
+    "status": "Payment confirmed",
+    "preheader": "Your payment for {{orderNumber}} is in and your order is being prepared.",
+    "heading": "Payment confirmed",
+    "intro": "We've received your payment and your order is being prepared.",
+    "nextSteps": "We'll let you know the moment it ships."
+  },
+  "orderCancelled": {
+    "subject": "Your order {{orderNumber}} has been cancelled",
+    "status": "Order cancelled",
+    "preheader": "Order {{orderNumber}} has been cancelled.",
+    "heading": "Your order has been cancelled",
+    "intro": "This order will not be fulfilled, and the items have gone back into stock.",
+    "nextSteps": "If you paid for this order, a refund follows separately and we will email you when it is on its way."
+  },
+  "orderRefunded": {
+    "subject": "Your refund for order {{orderNumber}} is on its way",
+    "status": "Refund issued",
+    "preheader": "We've refunded order {{orderNumber}}.",
+    "heading": "Your refund is on its way",
+    "intro": "We have refunded this order in full.",
+    "nextSteps": "Refunds usually reach your account within a few working days, depending on your bank."
+  },
+  "orderDelivered": {
+    "subject": "Your order {{orderNumber}} has arrived",
+    "status": "Delivered",
+    "preheader": "Order {{orderNumber}} has been delivered. We hope you love it.",
+    "heading": "Your parcel has arrived",
+    "intro": "Your order has been delivered. We hope you love it.",
+    "nextSteps": "If anything is not right, reply to this email and we will put it straight."
+  },
+  "shipmentDispatched": {
+    "subject": "Your order {{orderNumber}} is on its way",
+    "status": "On its way",
+    "preheader": "Order {{orderNumber}} has shipped. Here's how to follow it.",
+    "heading": "Your order has shipped",
+    "intro": "Your parcel is with the carrier.",
+    "carrier": "Carrier",
+    "trackingNumber": "Tracking number",
+    "trackLink": "Track your parcel",
+    "estimatedDelivery": "Estimated delivery"
+  },
+  "passwordResetCode": {
+    "subject": "Your {{storeName}} password reset code",
+    "status": "Password reset",
+    "preheader": "Use this code within {{minutes}} minutes to choose a new password.",
+    "heading": "Reset your password",
+    "intro": "We received a request to reset the password for your {{storeName}} account. Enter this code in the app to choose a new one.",
+    "codeLabel": "Your reset code",
+    "expiry": "This code expires in {{minutes}} minutes and can be used once.",
+    "ignore": "Didn't ask for this? You can safely ignore this email — your password stays the same.",
+    "nextSteps": "For your security, never share this code with anyone, including our team."
+  },
+  "passwordChanged": {
+    "subject": "Your {{storeName}} password was changed",
+    "status": "Security notice",
+    "preheader": "The password for your {{storeName}} account was just changed.",
+    "heading": "Your password was changed",
+    "intro": "The password for your {{storeName}} account was just reset, and you have been signed out on every device.",
+    "notYou": "If you didn't make this change, contact us straight away at",
+    "nextSteps": "You can now sign in with your new password."
+  }
+}

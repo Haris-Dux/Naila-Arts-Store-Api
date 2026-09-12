@@ -1,0 +1,38 @@
+{{!-- Carrier and tracking details, and the button to follow the parcel. --}}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 0; background-color:#FBF8F3; border:1px solid #EFE7DA; border-radius:12px; border-collapse:separate;">
+  <tr>
+    <td style="padding:18px 20px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:14px; line-height:20px;">
+        <tr>
+          <td style="padding:6px 0; color:#6F6468;">{{common.orderNumber}}</td>
+          <td align="right" style="padding:6px 0; font-weight:600; color:#4A1942;">{{shipment.orderNumber}}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 0; color:#6F6468;">{{copy.carrier}}</td>
+          <td align="right" style="padding:6px 0; color:#2B2226;">{{shipment.carrier}}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 0; color:#6F6468;">{{copy.trackingNumber}}</td>
+          <td align="right" style="padding:6px 0; color:#2B2226; font-family:'Courier New', Courier, monospace;">{{shipment.trackingNumber}}</td>
+        </tr>
+        {{#if shipment.estimatedDeliveryAt}}
+        <tr>
+          <td style="padding:6px 0; color:#6F6468;">{{copy.estimatedDelivery}}</td>
+          <td align="right" style="padding:6px 0; color:#2B2226;">{{shipment.estimatedDeliveryAt}}</td>
+        </tr>
+        {{/if}}
+      </table>
+    </td>
+  </tr>
+</table>
+
+{{#if shipment.trackingUrl}}
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 0;">
+  <tr>
+    <td style="background-color:#C9A55C; border-radius:999px;">
+      <a href="{{shipment.trackingUrl}}" style="display:inline-block; padding:14px 34px; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:14px; line-height:18px; font-weight:600; letter-spacing:1px; color:#2B0F27; text-decoration:none; border-radius:999px;">{{copy.trackLink}} &rarr;</a>
+    </td>
+  </tr>
+</table>
+<p style="margin:14px 0 0; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:12px; line-height:18px; color:#9A8F93; word-break:break-all;">{{shipment.trackingUrl}}</p>
+{{/if}}

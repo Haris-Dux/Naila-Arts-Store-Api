@@ -1,0 +1,91 @@
+{{!--
+  The Naila Arts shell shared by every email: plum header band with a gold
+  serif wordmark, a white card on an ivory ground, and a quiet footer.
+
+  Built for email clients, not browsers: table layout, every style inline and
+  no <style> block (many clients strip it, so nothing may depend on it — the
+  layout is fluid up to 600px instead of relying on media queries), and web-safe
+  font stacks, since web fonts load unreliably in mail. Colours: plum #4A1942,
+  soft gold #C9A55C, ivory #FBF8F3, ink #2B2226, muted #6F6468.
+--}}
+<!DOCTYPE html>
+<html lang="{{lang}}" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>{{heading}}</title>
+</head>
+<body style="margin:0; padding:0; background-color:#FBF8F3; -webkit-text-size-adjust:100%;">
+  {{!-- Inbox preview text, hidden in the email itself. --}}
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:#FBF8F3; mso-hide:all;">
+    {{preheader}}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#FBF8F3;">
+    <tr>
+      <td align="center" style="padding:32px 12px 24px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px;">
+
+          <tr>
+            <td align="center" style="background-color:#4A1942; border-radius:16px 16px 0 0; padding:34px 24px 30px;">
+              <div style="font-family:Georgia, 'Times New Roman', Times, serif; font-size:26px; line-height:30px; letter-spacing:8px; color:#C9A55C; text-transform:uppercase;">{{storeName}}</div>
+              <table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" style="margin:14px auto 0;">
+                <tr><td style="width:48px; height:1px; background-color:#C9A55C; font-size:0; line-height:1px;">&nbsp;</td></tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#FFFFFF; padding:40px 32px 8px; border-left:1px solid #EFE7DA; border-right:1px solid #EFE7DA;">
+              {{#if status}}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;">
+                <tr>
+                  <td style="background-color:#F4ECF2; border-radius:999px; padding:6px 14px; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:11px; line-height:14px; font-weight:600; letter-spacing:1.5px; text-transform:uppercase; color:#4A1942;">{{status}}</td>
+                </tr>
+              </table>
+              {{/if}}
+
+              <h1 style="margin:0 0 22px; font-family:Georgia, 'Times New Roman', Times, serif; font-size:26px; line-height:34px; font-weight:normal; color:#2B2226;">{{heading}}</h1>
+
+              <p style="margin:0 0 12px; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:15px; line-height:24px; color:#2B2226;">{{greeting}}</p>
+              <p style="margin:0; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:15px; line-height:24px; color:#4A4246;">{{intro}}</p>
+
+              {{{body}}}
+
+              {{#if nextSteps}}
+              <p style="margin:28px 0 0; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:15px; line-height:24px; color:#4A4246;">{{nextSteps}}</p>
+              {{/if}}
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#FFFFFF; padding:32px 32px 40px; border-left:1px solid #EFE7DA; border-right:1px solid #EFE7DA; border-bottom:1px solid #EFE7DA; border-radius:0 0 16px 16px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="border-top:1px solid #EFE7DA; font-size:0; line-height:0;">&nbsp;</td></tr>
+                <tr>
+                  <td style="padding-top:24px;">
+                    <p style="margin:0 0 6px; font-family:Georgia, 'Times New Roman', Times, serif; font-size:16px; line-height:24px; color:#4A1942;">{{signoff}}</p>
+                    <p style="margin:0; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:13px; line-height:20px; color:#6F6468;">{{supportLead}} <a href="mailto:{{supportEmail}}" style="color:#4A1942; text-decoration:underline;">{{supportEmail}}</a></p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:28px 24px 8px; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:12px; line-height:18px; color:#9A8F93;">
+              <div style="font-family:Georgia, 'Times New Roman', Times, serif; font-size:12px; letter-spacing:4px; text-transform:uppercase; color:#4A1942;">{{storeName}}</div>
+              <div style="margin-top:8px;">{{footerNote}}</div>
+              <div style="margin-top:6px;">&copy; {{year}} {{storeName}}</div>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

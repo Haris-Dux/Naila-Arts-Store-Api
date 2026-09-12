@@ -1,0 +1,14 @@
+{
+  // The e2e suite's compiler settings: the project's own, plus allowJs.
+  //
+  // sanitize-html's HTML parser (htmlparser2 and its dom* / entities
+  // dependencies) ships as ES modules only. Node loads those at runtime, but
+  // Jest's CommonJS module system cannot, so jest-e2e.json lets ts-jest
+  // transform exactly those packages — which it only does for .js when
+  // allowJs is on. Extending rather than inlining keeps the decorator settings
+  // Nest's dependency injection relies on.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true
+  }
+}

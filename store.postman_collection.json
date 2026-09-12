@@ -1,0 +1,1708 @@
+{
+  "info": {
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "name": "Store — customer API",
+    "description": "Every API the customer-facing store (website or app) integrates — nothing admin-only.\n\n**Base URL:** `{{baseUrl}}`, e.g. `https://api.yourshop.pk/api/v1`.\n\n**Responses** are wrapped: `{ \"success\": true, \"data\": ... }`. Lists put their rows in `data.items` and paging in `data.meta`.\n**Errors** look like `{ \"success\": false, \"code\": \"...\", \"message\": \"...\", \"details\": ... }` with the matching HTTP status.\n\n**Signing in:** Register or Log in returns an `accessToken` (15 minutes) and a `refreshToken` (30 days). Send `Authorization: Bearer <accessToken>`; on a 401, call Refresh tokens and retry.\n**Guests** can check out without an account. The server then identifies them with an httpOnly `guest_token` cookie, so web clients must send requests with `credentials: \"include\"`.\n**Money:** every amount is an integer in the currency's smallest unit — see Store config. Display the `formatted` string or divide by 10^`minorUnitExponent`.\n**Rate limits:** 300 requests a minute per client; sign-in, registration, token refresh and password change 10 a minute; checkout 20 a minute. Over the limit is a 429.\n\n**Running this collection:** run the folders top to bottom — each request hands ids to the next through collection variables. The shop needs at least one published, in-stock product."
+  },
+  "item": [
+    {
+      "name": "1. Store setup",
+      "description": "Call these when the app starts: currency settings, the site-wide content, and the navigation data. All public.",
+      "item": [
+        {
+          "name": "Store config",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/store/config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "store",
+                "config"
+              ]
+            },
+            "description": "Currency and store settings, needed to show and send prices.\n\n**Auth:** none.\n**Returns:** `currency` (e.g. `PKR`), `minorUnitExponent`, `name`, `timezone`.\n\nEvery amount in this API is an integer in the currency's smallest unit. Divide by 10^`minorUnitExponent` to display it — PKR is `0`, so amounts are already whole rupees. Never assume 100. Money objects also carry a ready-made `formatted` string."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('currency', d.currency);",
+                  "pm.collectionVariables.set('minorUnitExponent', d.minorUnitExponent);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Content sections",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/content/sections",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "content",
+                "sections"
+              ]
+            },
+            "description": "All the shop-managed content for the storefront chrome, in one call.\n\n**Auth:** none.\n**Returns:** a list of sections, each with a `key` and its `data`:\n- `announcement_bar` — `data.items[]`, each with `text` (up to 10 messages for the top bar).\n- `home_banner_slider` — `data.items[]`, each with `url` and optional `alt` (up to 5 homepage slides).\n\nOnly live items are returned, so render whatever comes back."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const sections = pm.response.json().data;",
+                  "pm.test('announcement bar and banners in one call', () => {",
+                  "  const keys = sections.map((s) => s.key);",
+                  "  pm.expect(keys).to.include('announcement_bar');",
+                  "  pm.expect(keys).to.include('home_banner_slider');",
+                  "});",
+                  "pm.test('each section carries its data', () => sections.forEach((s) => pm.expect(s).to.have.property('data')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Content section by key",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/content/sections/announcement_bar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "content",
+                "sections",
+                "announcement_bar"
+              ]
+            },
+            "description": "One section on its own — `announcement_bar` or `home_banner_slider`. Same shape as an entry in **Content sections**.\n\n**Auth:** none. An unknown key is a 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the requested section', () => pm.expect(pm.response.json().data.key).to.eql('announcement_bar'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Category tree",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/categories/tree",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "categories",
+                "tree"
+              ]
+            },
+            "description": "The navigation menu: top-level categories, each with its `children` (subcategories — the tree is at most two levels deep), in the shop's display order.\n\n**Auth:** none.\n**Returns:** a list of categories, each with `id`, `name`, `slug`, `children`. Use a category's `id` as `categoryId` (or a child's as `subcategoryId`) to filter products."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const roots = pm.response.json().data;",
+                  "pm.test('siblings in display order', () => {",
+                  "  const orders = roots.map((c) => c.order);",
+                  "  pm.expect(orders).to.eql(orders.slice().sort((a, b) => a - b));",
+                  "});",
+                  "if (roots.length) pm.collectionVariables.set('categoryId', roots[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sizes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sizes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sizes"
+              ]
+            },
+            "description": "Every size the shop uses (e.g. S, M, L), in display order — for a size filter. A product's own sizes come with the product.\n\n**Auth:** none.\n**Returns:** a list of sizes, each with `id`, `name`, `code`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const sizes = pm.response.json().data;",
+                  "pm.test('in display order', () => {",
+                  "  const orders = sizes.map((s) => s.order);",
+                  "  pm.expect(orders).to.eql(orders.slice().sort((a, b) => a - b));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Catalogue",
+      "description": "Product listing, search, filters and product pages. All public — no token needed.\n\nA product's `effectivePrice` is what the customer pays. When `isOnPromotion` is true, show `price` struck through next to it.",
+      "item": [
+        {
+          "name": "Browse products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?page=1&limit=20&sort=createdAt&order=desc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "sort",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "order",
+                  "value": "desc"
+                }
+              ]
+            },
+            "description": "A page of published products — a category or \"all products\" page with numbered pages.\n\n**Auth:** none.\n**Query (all optional):**\n- `page` — from 1. `limit` — 1–100, default 20.\n- `sort` — `createdAt` (newest), `effectivePrice`, `name`, `sellCount` (best sellers), `rating.average`; `relevance` together with `search`.\n- `order` — `asc` or `desc` (default `desc`).\n\n**Returns:** `items` (products) and `meta` with `total`, `page`, `limit`, `pages`, `hasNext`, `hasPrevious`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json().data;",
+                  "pm.test('page meta', () => pm.expect(body.meta).to.include.keys('total', 'page', 'pages', 'hasNext'));",
+                  "const first = body.items[0];",
+                  "const word = first && (first.name.match(/[A-Za-z]{3,}/) || [])[0];",
+                  "pm.collectionVariables.set('searchTerm', word || 'suit');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Infinite scroll — first batch",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?paginate=cursor&limit=12&sort=createdAt&order=desc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "paginate",
+                  "value": "cursor"
+                },
+                {
+                  "key": "limit",
+                  "value": "12"
+                },
+                {
+                  "key": "sort",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "order",
+                  "value": "desc"
+                }
+              ]
+            },
+            "description": "For an endless-scroll feed, use `paginate=cursor` instead of page numbers.\n\n**Auth:** none.\n**Query:** `paginate=cursor`, plus optional `limit`, `sort`, `order` and any filter from **Filter products**. `sort=relevance` is not available in this mode.\n**Returns:** `items` and `meta.nextCursor`. Pass that value as `cursor` to load the next batch. A `null` cursor means there is nothing more.\n\nUnlike page numbers, a cursor never shows a product twice or skips one when products are added while the customer scrolls."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json().data;",
+                  "pm.test('cursor meta, not page meta', () => {",
+                  "  pm.expect(body.meta).to.have.property('nextCursor');",
+                  "  pm.expect(body.meta).to.not.have.property('total');",
+                  "});",
+                  "pm.collectionVariables.set('productCursor', body.meta.nextCursor || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Infinite scroll — next batch",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?paginate=cursor&limit=12&sort=createdAt&order=desc&cursor={{productCursor}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "paginate",
+                  "value": "cursor"
+                },
+                {
+                  "key": "limit",
+                  "value": "12"
+                },
+                {
+                  "key": "sort",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "order",
+                  "value": "desc"
+                },
+                {
+                  "key": "cursor",
+                  "value": "{{productCursor}}"
+                }
+              ]
+            },
+            "description": "The next batch of the feed: the same query as the first request, plus `cursor` set to the previous response's `meta.nextCursor`. Keep every other parameter the same.\n\n**Auth:** none."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json().data;",
+                  "pm.test('a list of products', () => pm.expect(body.items).to.be.an('array'));",
+                  "pm.collectionVariables.set('productCursor', body.meta.nextCursor || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?search={{searchTerm}}&sort=relevance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "{{searchTerm}}"
+                },
+                {
+                  "key": "sort",
+                  "value": "relevance"
+                }
+              ]
+            },
+            "description": "Full-text search over product names and descriptions. Add `sort=relevance` to put the best matches first (numbered pages only).\n\n**Auth:** none.\n**Query:** `search` *(required here)*, plus any option from **Browse products** and **Filter products**."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('a list of products', () => pm.expect(pm.response.json().data.items).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Filter products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?inStock=true&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "inStock",
+                  "value": "true"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "categoryId",
+                  "value": "{{categoryId}}",
+                  "description": "Top-level category id from Category tree",
+                  "disabled": true
+                },
+                {
+                  "key": "subcategoryId",
+                  "value": "",
+                  "description": "A subcategory id",
+                  "disabled": true
+                },
+                {
+                  "key": "sizeId",
+                  "value": "",
+                  "description": "A size id from Sizes",
+                  "disabled": true
+                },
+                {
+                  "key": "sizing",
+                  "value": "SIZED",
+                  "description": "SIZED or UNSTITCHED",
+                  "disabled": true
+                },
+                {
+                  "key": "onPromotion",
+                  "value": "true",
+                  "description": "Only discounted products",
+                  "disabled": true
+                },
+                {
+                  "key": "minPrice",
+                  "value": "1000",
+                  "description": "Minor units",
+                  "disabled": true
+                },
+                {
+                  "key": "maxPrice",
+                  "value": "10000",
+                  "description": "Minor units",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Listing filters. Combine any of them with each other and with the browse options. The disabled parameters in the Params tab show the rest — tick one to try it.\n\n**Auth:** none.\n**Query (all optional):**\n- `categoryId` — everything under a top-level category, subcategories included.\n- `subcategoryId` — one subcategory only.\n- `sizeId` — only products offered in that size.\n- `sizing` — `SIZED` (choose a size) or `UNSTITCHED`.\n- `onPromotion=true` — only discounted products.\n- `minPrice`, `maxPrice` — in minor units, on the price actually charged.\n- `inStock=true` — hide sold-out products."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const product = pm.response.json().data.items.find((p) => p.inStock);",
+                  "pm.test('an in-stock product to buy (publish one if this fails)', () => pm.expect(product).to.be.an('object'));",
+                  "if (product) {",
+                  "  // Hand a real product to the product-page and checkout requests below.",
+                  "  pm.collectionVariables.set('productId', product.id);",
+                  "  pm.collectionVariables.set('productSlug', product.slug);",
+                  "  const line = { productId: product.id, quantity: 1 };",
+                  "  if (product.sizing === 'SIZED' && product.sizes.length) line.sizeId = product.sizes[0].id;",
+                  "  pm.collectionVariables.set('checkoutItems', JSON.stringify([line]));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "One product by `id`, with its images, sizes, prices and stock.\n\n**Auth:** none. An unpublished or deleted product is a 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the product asked for', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('productId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get product by slug",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/slug/{{productSlug}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "slug",
+                "{{productSlug}}"
+              ]
+            },
+            "description": "The same product, looked up by the `slug` in its page URL — what a product page loads.\n\n**Auth:** none.\n**Notable fields:**\n- `description` is rich text (HTML, already sanitised by the server) — render it as HTML.\n- `facebookVideoUrl` links the product's video on the shop's Facebook page, when set.\n- `sizes` lists the sizes to choose from when `sizing` is `SIZED`; `inStock` and `stock` say whether it can be bought."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the same product', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('productId')));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Account",
+      "description": "Sign-up, sign-in and the customer's profile. Signed-in requests send `Authorization: Bearer <accessToken>`.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Creates a customer account and signs it in.\n\n**Auth:** none.\n**Body:**\n- `name` *(required)*\n- `email` *(required, must not be registered already)*\n- `password` *(required)* — at least 10 characters, with upper and lower case letters, a number and a symbol.\n- `birthdate` *(optional)* — `YYYY-MM-DD`.\n\n**Returns:** `user` and `tokens` (`accessToken`, `refreshToken`). An email that is already registered is a 409. Limited to 10 attempts a minute.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ayesha Khan\",\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{customerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh address each run, so the collection can be run again and again.",
+                  "pm.collectionVariables.set('customerEmail', `ayesha+${Date.now()}@example.com`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('accessToken', d.tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', d.tokens.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Log in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Signs in with email and password.\n\n**Auth:** none.\n**Body:** `email`, `password`.\n**Returns:** `user` and `tokens` (`accessToken`, `refreshToken`). Wrong credentials, or a deactivated account, is a 401. Limited to 10 attempts a minute.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{customerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('accessToken', d.tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', d.tokens.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "The signed-in customer's account — use it to restore a session when the app opens.\n\n**Auth:** Bearer token.\n**Returns:** `id`, `name`, `email`, `birthdate`, `role`, and account dates."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the registered customer', () => pm.expect(pm.response.json().data.email).to.eql(pm.collectionVariables.get('customerEmail')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh tokens",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Access tokens expire after 15 minutes. When a request comes back 401, exchange the refresh token for a new pair here, then retry the request.\n\n**Auth:** none.\n**Body:** `refreshToken`.\n**Returns:** a new `accessToken` and `refreshToken`. Each refresh token works only once — always keep the new one. Refresh tokens last 30 days; after that the customer signs in again.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('accessToken', d.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', d.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update my profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            },
+            "description": "Changes the signed-in customer's own details.\n\n**Auth:** Bearer token.\n**Body (all optional):** `name`, `email`, `birthdate` (`YYYY-MM-DD`).\n**Returns:** the updated account. Any other field is a 400 — the password changes through **Change password**.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ayesha K.\",\n  \"birthdate\": \"1995-04-18\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('saved', () => pm.expect(pm.response.json().data.name).to.eql('Ayesha K.'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Checkout & orders",
+      "description": "The basket lives in the app; checkout sends it in one request. Prices, totals and stock are always decided by the server, never taken from the request.",
+      "item": [
+        {
+          "name": "Checkout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/orders/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "checkout"
+              ]
+            },
+            "description": "Places an order for the signed-in customer.\n\n**Auth:** Bearer token.\n**Headers:** `Idempotency-Key` *(required)* — a new random value (e.g. a UUID) for each order attempt, at least 8 characters. Send the same value again when retrying the same attempt after a timeout, so the customer can never be charged for two orders.\n\n**Body:**\n- `items` *(required, 1–100 lines)* — each `{ \"productId\", \"quantity\", \"sizeId\" }`. `quantity` is 1–999. `sizeId` is needed only for a product sold by size (`sizing: \"SIZED\"`); use one of that product's `sizes`.\n- `shippingAddress` *(required)* — `fullName`, `line1`, `city`, `postalCode`, `country` (two-letter code, e.g. `PK`). Optional: `line2`, `state`, `phone`.\n- `billingAddress` *(optional)* — same shape; defaults to the shipping address.\n- `customerNote` *(optional)* — up to 500 characters.\n\n**Returns:** the order, with status `PENDING` (awaiting payment). Not enough stock is a 409. Limited to 20 a minute.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": {{checkoutItems}},\n  \"shippingAddress\": {\n    \"fullName\": \"Ayesha Khan\",\n    \"line1\": \"House 12, Street 4, F-7/2\",\n    \"city\": \"Islamabad\",\n    \"postalCode\": \"44000\",\n    \"country\": \"PK\",\n    \"phone\": \"+92 300 1234567\"\n  },\n  \"customerNote\": \"Please call before delivery\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('orderId', d.id);",
+                  "pm.collectionVariables.set('orderTotal', d.grandTotal.amount);",
+                  "pm.test('starts unpaid', () => pm.expect(d.status).to.eql('PENDING'));",
+                  "pm.test('priced by the server', () =>",
+                  "  pm.expect(d.subtotal.amount).to.eql(d.items.reduce((sum, item) => sum + item.lineTotal.amount, 0)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My orders",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/orders?page=1&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "The customer's orders, newest first.\n\n**Auth:** Bearer token (a guest's `guest_token` cookie lists the guest's orders).\n**Query (all optional):** `page`, `limit`, `status` (e.g. `PENDING`), `sort` — `createdAt`, `placedAt`, `grandTotal` or `status` — and `order`.\n**Returns:** `items` and page `meta`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('includes the new order', () =>",
+                  "  pm.expect(pm.response.json().data.items.map((o) => o.id)).to.include(pm.collectionVariables.get('orderId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get order",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": "One order with its items, totals, addresses and `statusHistory`.\n\n**Auth:** Bearer token, or the guest cookie for a guest order. Someone else's order is a 404.\n**Order statuses:** `PENDING` (awaiting payment) → `PAID` → `FULFILLING` → `SHIPPED` → `DELIVERED`; or `CANCELLED` / `REFUNDED`. A cash-on-delivery order goes from `PENDING` straight to `FULFILLING`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the order', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('orderId')));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Payment",
+      "description": "After checkout, the customer chooses how to pay. The amount always comes from the order.",
+      "item": [
+        {
+          "name": "Pay by bank transfer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments"
+              ]
+            },
+            "description": "Starts payment for an order.\n\n**Auth:** Bearer token (the guest cookie for a guest order).\n**Body:** `orderId`, `method` — `BANK_TRANSFER` or `CASH_ON_DELIVERY`.\n**Returns:** the payment, with its `status` and `instructions`:\n- **Bank transfer** — `instructions` holds `bankName`, `accountName`, `accountNumber` and the `paymentReference` the customer must quote. Show these. The payment stays `PENDING` until the shop confirms the money arrived; the order then becomes `PAID`.\n- **Cash on delivery** — the payment is `AUTHORIZED` at once and the order moves to fulfilment; the courier collects the money.\n\nAn order that is not awaiting payment is a 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"method\": \"BANK_TRANSFER\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('paymentId', d.id);",
+                  "pm.test('amount comes from the order', () => pm.expect(d.amount.amount).to.eql(Number(pm.collectionVariables.get('orderTotal'))));",
+                  "pm.test('bank details to show the customer', () => pm.expect(d.instructions.paymentReference).to.be.a('string'));",
+                  "pm.test('pending until the transfer clears', () => pm.expect(d.status).to.eql('PENDING'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get payment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{paymentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{paymentId}}"
+              ]
+            },
+            "description": "One payment's current state — poll it on an order-confirmation page.\n\n**Auth:** Bearer token, or the guest cookie.\n**Payment statuses:** `PENDING`, `AUTHORIZED`, `CAPTURED` (money received), `FAILED`, `CANCELLED`, `REFUNDED`, `PARTIALLY_REFUNDED`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the payment', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('paymentId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Payments for an order",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/orders/{{orderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": "Every payment attempt made for one order, e.g. to show the bank details again later.\n\n**Auth:** Bearer token, or the guest cookie."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('includes the payment', () =>",
+                  "  pm.expect(pm.response.json().data.map((p) => p.id)).to.include(pm.collectionVariables.get('paymentId')));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Cancelling",
+      "description": "A customer can cancel their own order until the shop starts fulfilling it.",
+      "item": [
+        {
+          "name": "Cancel order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "cancel"
+              ]
+            },
+            "description": "Cancels the order and returns its items to stock.\n\n**Auth:** Bearer token, or the guest cookie for a guest order.\n**Body (optional):** `reason` — up to 500 characters.\n**Returns:** the order, now `CANCELLED`. Only `PENDING` or `PAID` orders can be cancelled here; after that it is a 403 and the customer has to contact the shop.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Ordered the wrong colour\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('cancelled', () => pm.expect(pm.response.json().data.status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Guest checkout",
+      "description": "Buying without an account. The guest is identified by a cookie the server sets at checkout, so web clients must send cookies: `fetch(url, { credentials: \"include\" })`.",
+      "item": [
+        {
+          "name": "Checkout as a guest",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/orders/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "checkout"
+              ]
+            },
+            "description": "The same checkout without signing in.\n\n**Auth:** none.\n**Headers:** `Idempotency-Key` *(required)* — as for **Checkout**.\n**Body:** the same as **Checkout**, plus `email` and `name` *(both required for a guest)* — the order confirmation is emailed there.\n\n**Returns:** the order (`isGuestOrder: true`). The response also sets an httpOnly `guest_token` cookie, valid for 30 days. It is how this guest reads, pays for, cancels and tracks the order — keep sending it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": {{checkoutItems}},\n  \"email\": \"guest+{{$timestamp}}@example.com\",\n  \"name\": \"Bilal Ahmed\",\n  \"shippingAddress\": {\n    \"fullName\": \"Bilal Ahmed\",\n    \"line1\": \"Flat 3, Block B, Gulberg III\",\n    \"city\": \"Lahore\",\n    \"postalCode\": \"54660\",\n    \"country\": \"PK\",\n    \"phone\": \"+92 300 1234567\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('guestOrderId', d.id);",
+                  "pm.test('placed without an account', () => pm.expect(d.isGuestOrder).to.be.true);",
+                  "pm.test('guest cookie set', () => pm.expect(pm.cookies.has('guest_token')).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "View guest order",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{guestOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{guestOrderId}}"
+              ]
+            },
+            "description": "The guest reads their order back — the same endpoint as **Get order**.\n\n**Auth:** the `guest_token` cookie from checkout; no token. Without the cookie it is a 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the guest order', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('guestOrderId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pay cash on delivery",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments"
+              ]
+            },
+            "description": "Cash on delivery for the guest order — the same endpoint as **Pay by bank transfer**, with `method: \"CASH_ON_DELIVERY\"`.\n\n**Auth:** the guest cookie.\n**Returns:** the payment, `AUTHORIZED` — the order goes to fulfilment and the courier collects the money.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{guestOrderId}}\",\n  \"method\": \"CASH_ON_DELIVERY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('authorized, not pending', () => pm.expect(pm.response.json().data.status).to.eql('AUTHORIZED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8. Delivery tracking",
+      "description": "A shipment is created automatically a few seconds after an order is confirmed (paid, or cash on delivery). Before that, tracking returns 404.",
+      "item": [
+        {
+          "name": "Track an order's shipment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/shipments/orders/{{guestOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "shipments",
+                "orders",
+                "{{guestOrderId}}"
+              ]
+            },
+            "description": "The shipment for one order — its `status`, plus the carrier and tracking details once the shop dispatches it.\n\n**Auth:** Bearer token, or the guest cookie.\n**Shipment statuses:** `PENDING`, `PREPARING`, `IN_TRANSIT`, `DELIVERED`, `FAILED` (delivery attempt failed), `RETURNED`, `CANCELLED`.\n\nA 404 just after payment means the shipment has not been created yet — try again shortly."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The shipment is created asynchronously just after the order is confirmed, so",
+                  "// a 404 on the first try is expected; retry a few times before failing.",
+                  "const attempts = Number(pm.collectionVariables.get('shipmentAttempts') || 0);",
+                  "if (pm.response.code === 404 && attempts < 10) {",
+                  "  pm.collectionVariables.set('shipmentAttempts', attempts + 1);",
+                  "  const until = Date.now() + 700;",
+                  "  while (Date.now() < until) { /* wait for the shipment to be created */ }",
+                  "  pm.execution.setNextRequest(\"Track an order's shipment\");",
+                  "} else {",
+                  "  pm.collectionVariables.set('shipmentAttempts', 0);",
+                  "  pm.test('200', () => pm.response.to.have.status(200));",
+                  "  pm.collectionVariables.set('shipmentId', pm.response.json().data.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get shipment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/shipments/{{shipmentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "shipments",
+                "{{shipmentId}}"
+              ]
+            },
+            "description": "One shipment by `id`.\n\n**Auth:** Bearer token, or the guest cookie."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('the shipment', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('shipmentId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My shipments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/shipments?page=1&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "shipments"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "All of the customer's shipments, newest first.\n\n**Auth:** Bearer token, or the guest cookie (this request sends only the cookie, so it lists the guest's).\n**Query (all optional):** `page`, `limit`, `status`, `order`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('includes the shipment', () =>",
+                  "  pm.expect(pm.response.json().data.items.map((s) => s.id)).to.include(pm.collectionVariables.get('shipmentId')));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9. Password & signing out",
+      "description": "Changing the password, resetting a forgotten one, and ending sessions.",
+      "item": [
+        {
+          "name": "Change password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/change-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "change-password"
+              ]
+            },
+            "description": "Changes the customer's password.\n\n**Auth:** Bearer token.\n**Body:** `currentPassword`, `newPassword` (same rules as at registration).\n**Returns:** 204, no body. Every session on every device is signed out, so sign in again with the new password. A wrong current password is a 401. Limited to 10 attempts a minute.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{customerPassword}}\",\n  \"newPassword\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Log in with the new password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "**Log in** again, now with the new password.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('accessToken', d.tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', d.tokens.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Log out",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Signs out of this device: the refresh token stops working. Delete both tokens from the app afterwards.\n\n**Auth:** Bearer token.\n**Body:** `refreshToken`.\n**Returns:** 204, no body.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Log out everywhere",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout-all"
+              ]
+            },
+            "description": "Signs the customer out on every device at once — e.g. after losing a phone.\n\n**Auth:** Bearer token.\n**Returns:** 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "description": "Starts a reset for a customer who has forgotten their password: a 6-digit code is emailed to them.\n\n**Auth:** none.\n**Body:** `email`.\n**Returns:** 202 with a `message`. The answer is always the same, whether or not the email has an account, so the app cannot be used to find out who is registered — show something like \"If an account exists, we've emailed you a code\".\n\nThe code expires after 10 minutes and works once. Asking again within a minute sends nothing (the earlier code still works), and at most 5 codes are sent an hour. Only customer accounts can reset this way. Limited to 10 attempts a minute.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202', () => pm.response.to.have.status(202));",
+                  "pm.test('the same answer for everyone', () => pm.expect(pm.response.json().data.message).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reset password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "Sets a new password using the code from the email.\n\n**Auth:** none.\n**Body:** `email`, `code` (the 6 digits from the email), `newPassword` (same rules as at registration).\n**Returns:** 204, no body. The customer is signed out on every device and signs in with the new password; a confirmation email follows.\n\nEvery failure — a wrong, expired or already-used code — is the same 400 with code `INVALID_RESET_CODE`: \"The code is invalid or has expired\". After 5 wrong tries the code stops working and the customer asks for a new one. A weak `newPassword` is an ordinary validation 400 and does not use up a try. Limited to 10 attempts a minute.\n\n*In this collection:* set the `resetCode` variable to the code from the email to see a 204; left at `000000` it shows the 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"code\": \"{{resetCode}}\",\n  \"newPassword\": \"{{resetNewPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Newman cannot read the inbox: with the placeholder code the API answers with",
+                  "// the generic 400; with the real code from the email, 204.",
+                  "const placeholder = pm.collectionVariables.get('resetCode') === '000000';",
+                  "pm.test(placeholder ? '400 without the emailed code' : '204', () =>",
+                  "  pm.response.to.have.status(placeholder ? 400 : 204));",
+                  "if (placeholder) pm.test('the one generic error', () => pm.expect(pm.response.json().code).to.eql('INVALID_RESET_CODE'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api/v1"
+    },
+    {
+      "key": "customerEmail",
+      "value": ""
+    },
+    {
+      "key": "customerPassword",
+      "value": "StrongP@ssw0rd!"
+    },
+    {
+      "key": "newPassword",
+      "value": "N3w-StrongP@ss!"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    },
+    {
+      "key": "currency",
+      "value": ""
+    },
+    {
+      "key": "minorUnitExponent",
+      "value": ""
+    },
+    {
+      "key": "categoryId",
+      "value": ""
+    },
+    {
+      "key": "searchTerm",
+      "value": ""
+    },
+    {
+      "key": "productCursor",
+      "value": ""
+    },
+    {
+      "key": "productId",
+      "value": ""
+    },
+    {
+      "key": "productSlug",
+      "value": ""
+    },
+    {
+      "key": "checkoutItems",
+      "value": "[]"
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    },
+    {
+      "key": "orderTotal",
+      "value": ""
+    },
+    {
+      "key": "paymentId",
+      "value": ""
+    },
+    {
+      "key": "guestOrderId",
+      "value": ""
+    },
+    {
+      "key": "shipmentId",
+      "value": ""
+    },
+    {
+      "key": "shipmentAttempts",
+      "value": "0"
+    },
+    {
+      "key": "resetCode",
+      "value": "000000"
+    },
+    {
+      "key": "resetNewPassword",
+      "value": "R3set-StrongP@ss!"
+    }
+  ]
+}

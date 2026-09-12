@@ -1,0 +1,86 @@
+{
+  "common": {
+    "greeting": "Merhaba {{name}},",
+    "signoff": "{{storeName}} mağazasından alışveriş yaptığınız için teşekkürler.",
+    "supportLead": "Sorularınız için bize yazın:",
+    "footerNote": "Bu e-postayı {{storeName}} üzerindeki son siparişiniz veya hesap hareketiniz nedeniyle alıyorsunuz.",
+    "orderNumber": "Sipariş numarası",
+    "total": "Toplam",
+    "size": "Beden",
+    "product": "Ürün",
+    "quantity": "Adet",
+    "unitPrice": "Birim fiyat",
+    "lineTotal": "Satır toplamı"
+  },
+  "orderPlaced": {
+    "subject": "{{orderNumber}} numaralı siparişinizi aldık",
+    "status": "Sipariş alındı",
+    "preheader": "{{orderNumber}} numaralı siparişiniz için teşekkürler. Seçtikleriniz aşağıda.",
+    "heading": "Siparişiniz alındı",
+    "intro": "Siparişiniz için teşekkürler. Ödemeniz onaylandığında tekrar bilgilendireceğiz.",
+    "nextSteps": "Şu an yapmanız gereken bir şey yok."
+  },
+  "orderPaid": {
+    "subject": "{{orderNumber}} numaralı sipariş için ödeme alındı",
+    "status": "Ödeme onaylandı",
+    "preheader": "{{orderNumber}} numaralı siparişinizin ödemesi alındı, siparişiniz hazırlanıyor.",
+    "heading": "Ödeme onaylandı",
+    "intro": "Ödemenizi aldık, siparişiniz hazırlanıyor.",
+    "nextSteps": "Kargoya verildiğinde sizi bilgilendireceğiz."
+  },
+  "orderCancelled": {
+    "subject": "{{orderNumber}} numaralı siparişiniz iptal edildi",
+    "status": "Sipariş iptal edildi",
+    "preheader": "{{orderNumber}} numaralı siparişiniz iptal edildi.",
+    "heading": "Siparişiniz iptal edildi",
+    "intro": "Bu sipariş hazırlanmayacak ve ürünler yeniden stoğa alındı.",
+    "nextSteps": "Bu sipariş için ödeme yaptıysanız, iadesi ayrıca yapılır ve yola çıktığında size e-posta göndeririz."
+  },
+  "orderRefunded": {
+    "subject": "{{orderNumber}} numaralı siparişinizin iadesi yolda",
+    "status": "İade yapıldı",
+    "preheader": "{{orderNumber}} numaralı siparişinizi iade ettik.",
+    "heading": "İadeniz yolda",
+    "intro": "Bu siparişin tamamını iade ettik.",
+    "nextSteps": "İadeler bankanıza bağlı olarak genellikle birkaç iş günü içinde hesabınıza geçer."
+  },
+  "orderDelivered": {
+    "subject": "{{orderNumber}} numaralı siparişiniz teslim edildi",
+    "status": "Teslim edildi",
+    "preheader": "{{orderNumber}} numaralı siparişiniz teslim edildi. Beğenmenizi umuyoruz.",
+    "heading": "Paketiniz teslim edildi",
+    "intro": "Siparişiniz teslim edildi. Beğenmenizi umuyoruz.",
+    "nextSteps": "Bir sorun varsa bu e-postayı yanıtlayın, hemen çözelim."
+  },
+  "shipmentDispatched": {
+    "subject": "{{orderNumber}} numaralı siparişiniz yolda",
+    "status": "Yolda",
+    "preheader": "{{orderNumber}} numaralı siparişiniz kargoya verildi. Nasıl takip edeceğiniz aşağıda.",
+    "heading": "Siparişiniz kargoya verildi",
+    "intro": "Paketiniz kargo firmasına teslim edildi.",
+    "carrier": "Kargo firması",
+    "trackingNumber": "Takip numarası",
+    "trackLink": "Kargonu takip et",
+    "estimatedDelivery": "Tahmini teslimat"
+  },
+  "passwordResetCode": {
+    "subject": "{{storeName}} şifre sıfırlama kodunuz",
+    "status": "Şifre sıfırlama",
+    "preheader": "Yeni bir şifre belirlemek için bu kodu {{minutes}} dakika içinde kullanın.",
+    "heading": "Şifrenizi sıfırlayın",
+    "intro": "{{storeName}} hesabınızın şifresini sıfırlama talebi aldık. Yeni bir şifre belirlemek için bu kodu uygulamaya girin.",
+    "codeLabel": "Sıfırlama kodunuz",
+    "expiry": "Bu kod {{minutes}} dakika içinde geçerliliğini yitirir ve yalnızca bir kez kullanılabilir.",
+    "ignore": "Bu talebi siz yapmadıysanız bu e-postayı yok sayabilirsiniz; şifreniz değişmez.",
+    "nextSteps": "Güvenliğiniz için bu kodu ekibimiz dahil kimseyle paylaşmayın."
+  },
+  "passwordChanged": {
+    "subject": "{{storeName}} şifreniz değiştirildi",
+    "status": "Güvenlik bildirimi",
+    "preheader": "{{storeName}} hesabınızın şifresi az önce değiştirildi.",
+    "heading": "Şifreniz değiştirildi",
+    "intro": "{{storeName}} hesabınızın şifresi az önce sıfırlandı ve tüm cihazlarda oturumunuz kapatıldı.",
+    "notYou": "Bu değişikliği siz yapmadıysanız hemen bize yazın:",
+    "nextSteps": "Artık yeni şifrenizle giriş yapabilirsiniz."
+  }
+}

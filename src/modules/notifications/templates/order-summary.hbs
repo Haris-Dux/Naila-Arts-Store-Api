@@ -1,0 +1,40 @@
+{{!-- The order card shared by the order emails: number, items, total. --}}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 0; border:1px solid #EFE7DA; border-radius:12px; border-collapse:separate;">
+  <tr>
+    <td style="padding:14px 20px; background-color:#FBF8F3; border-bottom:1px solid #EFE7DA; border-radius:12px 12px 0 0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:11px; line-height:16px; font-weight:600; letter-spacing:1.5px; text-transform:uppercase; color:#6F6468;">{{common.orderNumber}}</td>
+          <td align="right" style="font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:14px; line-height:16px; font-weight:600; color:#4A1942;">{{order.orderNumber}}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  {{#each order.items}}
+  <tr>
+    <td style="padding:16px 20px; border-bottom:1px solid #F3EDE3;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td valign="top" style="font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:15px; line-height:22px; color:#2B2226;">
+            {{this.name}}
+            <div style="margin-top:4px; font-size:13px; line-height:18px; color:#6F6468;">{{#if this.size}}{{@root.common.size}}: {{this.size}} &nbsp;&middot;&nbsp; {{/if}}<span style="white-space:nowrap;">{{this.quantity}} &times; {{this.unitPrice}}</span></div>
+          </td>
+          <td align="right" valign="top" style="padding-left:16px; white-space:nowrap; font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size:15px; line-height:22px; color:#2B2226;">{{this.lineTotal}}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  {{/each}}
+
+  <tr>
+    <td style="padding:18px 20px; border-top:2px solid #C9A55C;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="font-family:Georgia, 'Times New Roman', Times, serif; font-size:16px; line-height:22px; color:#4A1942;">{{common.total}}</td>
+          <td align="right" style="font-family:Georgia, 'Times New Roman', Times, serif; font-size:19px; line-height:22px; font-weight:bold; color:#4A1942;">{{order.total}}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
