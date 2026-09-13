@@ -9,6 +9,7 @@ import {
 } from '../../common/exceptions/domain.exception';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { ContentSection, ContentSectionDocument } from '../content/schemas/content-section.schema';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 import { MediaResponseDto } from './dto/media.dto';
 import { Media, MediaDocument } from './schemas/media.schema';
@@ -36,6 +37,8 @@ export const MAX_FILES_PER_UPLOAD = 10;
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 /** Guards against a header claiming a canvas no browser will ever paint. */
 const MAX_DIMENSION = 10_000;
+/** The content hash at the end of one of our URLs, whichever domain it is served from. */
+const HASH_IN_URL = /([0-9a-f]{64})\.webp$/i;
 
 @Injectable()
 export class MediaService {
@@ -44,6 +47,8 @@ export class MediaService {
   constructor(
     @InjectModel(Media.name) private readonly mediaModel: Model<MediaDocument>,
     @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
+    @InjectModel(ContentSection.name)
+    private readonly sectionModel: Model<ContentSectionDocument>,
     @Inject(MEDIA_STORAGE) private readonly storage: MediaStorage,
   ) {}
 
@@ -172,7 +177,8 @@ export class MediaService {
   }
 
   /**
-   * Delete a file, refused while the catalogue still points at it.
+   * Delete a file, refused while the catalogue or a storefront section still
+   * points at it.
    *
    * The check is a query rather than a stored counter, the same way a category
    * or a size refuses deletion: there is no number to drift out of step with
@@ -181,16 +187,82 @@ export class MediaService {
   async remove(id: string): Promise<void> {
     const media = await this.getDocumentOrThrow(id);
 
-    const inUse = await this.productModel.countDocuments({
-      'images.mediaId': media._id,
-      ...notDeleted,
-    });
-    if (inUse > 0) {
+    const { products, sections } = await this.usage(media);
+    if (products > 0) {
       throw new ConflictException(
-        `Cannot delete an image used by ${inUse} product(s); remove it from them first`,
+        `Cannot delete an image used by ${products} product(s); remove it from them first`,
+      );
+    }
+    if (sections > 0) {
+      throw new ConflictException(
+        `Cannot delete an image shown in ${sections} storefront section(s), such as the ` +
+          'homepage banner; remove it there first',
       );
     }
 
+    await this.discard(media);
+  }
+
+  /**
+   * Delete whichever of these URLs' files nothing uses any more.
+   *
+   * Called after a storefront section is saved, with the image URLs the save
+   * took out. A URL that is not one of ours, or whose file a product or another
+   * section still shows, is left alone — so a photograph used on both a product
+   * and a banner survives the banner being changed.
+   *
+   * Never throws. The section is already saved, and failing the request because
+   * storage hiccuped would tell the administrator their edit did not happen when
+   * it did. A file left behind is logged for an operator instead.
+   */
+  async releaseUnused(urls: string[]): Promise<void> {
+    const hashes = [
+      ...new Set(urls.map((url) => HASH_IN_URL.exec(url)?.[1]?.toLowerCase())),
+    ].filter((hash): hash is string => Boolean(hash));
+    if (hashes.length === 0) return;
+
+    let candidates: MediaDocument[];
+    try {
+      candidates = await this.mediaModel.find({ hash: { $in: hashes }, ...notDeleted }).exec();
+    } catch (error) {
+      this.logger.error(`Could not look up released media: ${(error as Error).message}`);
+      return;
+    }
+
+    for (const media of candidates) {
+      try {
+        const { products, sections } = await this.usage(media);
+        if (products + sections === 0) await this.discard(media);
+      } catch (error) {
+        this.logger.error(
+          `Could not delete unused media ${media.storageKey}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ shared
+
+  /**
+   * Where a file is still shown: products by reference, storefront sections by URL.
+   *
+   * A section stores the URL rather than an id, so it is matched on the content
+   * hash at the end of it — which still holds if the public domain in front of
+   * the bucket changes. The hash is hex, so it needs no escaping in the pattern.
+   */
+  private async usage(media: MediaDocument): Promise<{ products: number; sections: number }> {
+    const [products, sections] = await Promise.all([
+      this.productModel.countDocuments({ 'images.mediaId': media._id, ...notDeleted }),
+      this.sectionModel.countDocuments({
+        'data.items.url': { $regex: `${media.hash}\\.webp$`, $options: 'i' },
+        ...notDeleted,
+      }),
+    ]);
+    return { products, sections };
+  }
+
+  /** Remove the row and then the bytes. */
+  private async discard(media: MediaDocument): Promise<void> {
     // Row first: if the unlink fails the reference is already gone, which is
     // recoverable. The reverse leaves the catalogue pointing at nothing.
     media.deletedAt = new Date();
@@ -200,16 +272,14 @@ export class MediaService {
     this.logger.log(`Deleted media ${media.hash.slice(0, 12)}…`);
   }
 
-  // ------------------------------------------------------------------ shared
-
   /**
-   * `<first two hex chars>/<hash>.webp`.
+   * `media/<hash>.webp`.
    *
-   * Sharded so one directory does not accumulate every file in the catalogue.
-   * ext4 copes with large directories, but every `ls` an operator runs does not.
+   * One prefix for everything this application writes, so its files sit in a
+   * single folder of the bucket rather than a scatter of hash-named ones.
    */
   private static storageKeyFor(hash: string): string {
-    return `${hash.slice(0, 2)}/${hash}.webp`;
+    return `media/${hash}.webp`;
   }
 
   private present(media: MediaDocument): MediaResponseDto {

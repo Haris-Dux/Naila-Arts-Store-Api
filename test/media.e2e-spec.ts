@@ -4,6 +4,10 @@ import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Model } from 'mongoose';
 import request from 'supertest';
+import {
+  ContentSection,
+  ContentSectionDocument,
+} from '../src/modules/content/schemas/content-section.schema';
 import { Media, MediaDocument } from '../src/modules/media/schemas/media.schema';
 import { Product, ProductDocument } from '../src/modules/products/schemas/product.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
@@ -22,6 +26,7 @@ describe('Media (e2e)', () => {
   let app: INestApplication;
   let mediaModel: Model<MediaDocument>;
   let productModel: Model<ProductDocument>;
+  let sectionModel: Model<ContentSectionDocument>;
   let userModel: Model<UserDocument>;
 
   const password = 'StrongP@ssw0rd!';
@@ -34,6 +39,7 @@ describe('Media (e2e)', () => {
     app = ctx.app;
     mediaModel = app.get<Model<MediaDocument>>(getModelToken(Media.name));
     productModel = app.get<Model<ProductDocument>>(getModelToken(Product.name));
+    sectionModel = app.get<Model<ContentSectionDocument>>(getModelToken(ContentSection.name));
     userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
   }, 120_000);
 
@@ -90,6 +96,7 @@ describe('Media (e2e)', () => {
     await Promise.all([
       mediaModel.deleteMany({}),
       productModel.deleteMany({}),
+      sectionModel.deleteMany({}),
       userModel.deleteMany({}),
     ]);
     adminToken = await makeUser('admin@example.com', UserRole.ADMIN);
@@ -131,7 +138,8 @@ describe('Media (e2e)', () => {
       // Dimensions come from the file's own header, so a grid can reserve the
       // right box before the bytes arrive.
       expect(media).toMatchObject({ width: 1200, height: 1600 });
-      expect(media.url).toMatch(/^\/media\/[0-9a-f]{2}\/[0-9a-f]{64}\.webp$/);
+      // Every file under one `media/` prefix, named by its content hash.
+      expect(media.url).toMatch(/^\/media\/media\/[0-9a-f]{64}\.webp$/);
     });
 
     it('writes the bytes to disk under the content hash', async () => {
@@ -345,6 +353,69 @@ describe('Media (e2e)', () => {
         .delete(api(`/media/${a}`))
         .set('Authorization', `Bearer ${shopperToken}`)
         .expect(403);
+    });
+  });
+
+  // -------------------------------------------------------- banner linkage
+
+  describe('a banner uses what was uploaded', () => {
+    // A banner stores an absolute URL; the local driver hands back a path.
+    const absoluteUrl = async (id: string) => {
+      const res = await request(app.getHttpServer())
+        .get(api(`/media/${id}`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      return `http://localhost${res.body.data.url as string}`;
+    };
+
+    const saveBanners = (urls: string[]) =>
+      request(app.getHttpServer())
+        .put(api('/content/sections/home_banner_slider'))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ data: { items: urls.map((url) => ({ url, isActive: true })) } })
+        .expect(200);
+
+    const fileOf = async (id: string) => {
+      const stored = await mediaModel.findById(id).exec();
+      return join(process.env.MEDIA_ROOT as string, stored!.storageKey);
+    };
+
+    it('deletes an image taken out of the slider once the slider is saved', async () => {
+      const [a, b] = await upload(2);
+      await saveBanners([await absoluteUrl(a), await absoluteUrl(b)]);
+      const [pathA, pathB] = [await fileOf(a), await fileOf(b)];
+
+      await saveBanners([await absoluteUrl(b)]);
+
+      await expect(readFile(pathA)).rejects.toThrow();
+      await request(app.getHttpServer())
+        .get(api(`/media/${a}`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(404);
+      // The slide that stayed keeps its file.
+      await expect(readFile(pathB)).resolves.toBeDefined();
+    });
+
+    it('keeps an image a product still uses', async () => {
+      const [a] = await upload(1);
+      await makeProduct({ images: [{ mediaId: a }] }).expect(201);
+      await saveBanners([await absoluteUrl(a)]);
+      const path = await fileOf(a);
+
+      await saveBanners([]);
+
+      await expect(readFile(path)).resolves.toBeDefined();
+    });
+
+    it('refuses deleting an image the slider shows', async () => {
+      const [a] = await upload(1);
+      await saveBanners([await absoluteUrl(a)]);
+
+      const refused = await request(app.getHttpServer())
+        .delete(api(`/media/${a}`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(409);
+      expect(refused.body.message).toMatch(/storefront section/);
     });
   });
 });

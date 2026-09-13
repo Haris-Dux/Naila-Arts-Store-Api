@@ -9,6 +9,7 @@ import {
 } from '../../common/exceptions/domain.exception';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
+import { MediaService } from '../media/media.service';
 import { SectionResponseDto, UpdateSectionDto } from './dto/content-section.dto';
 import { ContentSection, ContentSectionDocument } from './schemas/content-section.schema';
 import { SECTION_REGISTRY } from './sections';
@@ -31,6 +32,7 @@ export class ContentService {
   constructor(
     @InjectModel(ContentSection.name)
     private readonly sectionModel: Model<ContentSectionDocument>,
+    private readonly media: MediaService,
   ) {}
 
   // ------------------------------------------------------------------- reads
@@ -81,6 +83,9 @@ export class ContentService {
     const definition = this.definitionOrThrow(key);
     const data = await this.validate(definition, dto.data);
 
+    // Read before the write, to learn which images this save takes out.
+    const previous = await this.sectionModel.findOne({ key }).select('data').lean().exec();
+
     const saved = await this.sectionModel
       .findOneAndUpdate(
         { key },
@@ -96,6 +101,13 @@ export class ContentService {
       )
       .exec();
 
+    // An image dropped from the section is deleted once nothing else uses it —
+    // otherwise every banner ever replaced would stay in storage for good. After
+    // the write, so the usage check sees the section as it now is.
+    const kept = new Set(ContentService.imageUrls(data));
+    const dropped = ContentService.imageUrls(previous?.data).filter((url) => !kept.has(url));
+    if (dropped.length > 0) await this.media.releaseUnused(dropped);
+
     // Returned as staff see it: the caller is an administrator, and echoing back
     // a filtered copy of what they just saved would be actively confusing.
     // Never null for staff — `present` only withholds an unpublished section
@@ -104,6 +116,21 @@ export class ContentService {
   }
 
   // ------------------------------------------------------------------ shared
+
+  /**
+   * The `url` of every entry in a section's `items`.
+   *
+   * Read off the stored shape rather than any one section's DTO, so a future
+   * section with images is covered without a change here. A section with no
+   * `url` fields — the announcement bar — simply yields nothing.
+   */
+  private static imageUrls(data: unknown): string[] {
+    const items = (data as { items?: unknown } | null | undefined)?.items;
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item) => (item as { url?: unknown } | null)?.url)
+      .filter((url): url is string => typeof url === 'string');
+  }
 
   private definitionOrThrow(key: string): RegisteredSection {
     const definition = this.definitions.get(key);

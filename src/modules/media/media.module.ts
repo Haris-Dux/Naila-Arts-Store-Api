@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { MediaConfig } from '../../config/configuration';
+import { ContentSection, ContentSectionSchema } from '../content/schemas/content-section.schema';
 import { Product, ProductSchema } from '../products/schemas/product.schema';
 import { MediaController } from './media.controller';
 import { MediaService } from './media.service';
@@ -21,9 +22,10 @@ import { R2Storage } from './storage/r2.storage';
  * because a missing R2 credential must fail at boot — the config validator
  * requires them when the driver is `r2` — rather than on the first upload.
  *
- * Registers the Product model rather than importing ProductsModule, for the same
- * reason categories and sizes do: it needs to refuse deleting an image the
- * catalogue still uses, and products depends on this module.
+ * Registers the Product and ContentSection models rather than importing their
+ * modules, for the same reason categories and sizes do: it needs to refuse
+ * deleting an image a product or a banner still uses, and both of those modules
+ * depend on this one.
  */
 /**
  * Pick the storage adapter the environment asked for.
@@ -48,6 +50,7 @@ export const mediaStorageFactory = (
     MongooseModule.forFeature([
       { name: Media.name, schema: MediaSchema },
       { name: Product.name, schema: ProductSchema },
+      { name: ContentSection.name, schema: ContentSectionSchema },
     ]),
   ],
   controllers: [MediaController],
