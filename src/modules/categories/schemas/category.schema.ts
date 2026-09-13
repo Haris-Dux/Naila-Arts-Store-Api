@@ -8,7 +8,7 @@ export type CategoryDocument = HydratedDocument<Category>;
  * A real collection, not the bare `category_id: number` the old DTO carried
  * against a column that did not exist on the entity.
  */
-@Schema({ timestamps: true, collection: 'categories' })
+@Schema({ timestamps: true, collection: 'store-categories' })
 export class Category extends BaseSchemaClass {
   @Prop({ required: true, trim: true })
   name!: string;

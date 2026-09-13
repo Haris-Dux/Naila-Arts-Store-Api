@@ -5,7 +5,7 @@ import { UserRole } from '../enums/user-role.enum';
 
 export type UserDocument = HydratedDocument<User>;
 
-@Schema({ timestamps: true, collection: 'users' })
+@Schema({ timestamps: true, collection: 'store-users' })
 export class User extends BaseSchemaClass {
   @Prop({ required: true, trim: true })
   name!: string;
