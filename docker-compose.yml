@@ -12,19 +12,7 @@ services:
     ports:
       - '4000:4000'
     env_file:
-      - .env
-    environment:
-      NODE_ENV: production
-      MONGO_URI: mongodb://mongo:27017/store?replicaSet=rs0&directConnection=true
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      MEDIA_DRIVER: ${r2}
-      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
-      R2_BUCKET: ${R2_BUCKET:-}
-      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
-
+      - /root/Naila-Arts/env-files/.env.store.api
     depends_on:
       redis:
         condition: service_healthy
