@@ -171,7 +171,7 @@ describe('Verification regressions (e2e)', () => {
       const payment = await request(app.getHttpServer())
         .post(api('/payments'))
         .set('Authorization', `Bearer ${shopper.token}`)
-        .send({ orderId: order.body.data.id, method: PaymentMethod.BANK_TRANSFER })
+        .send({ orderId: order.body.data.id, method: PaymentMethod.CASH_ON_DELIVERY })
         .expect(201);
 
       return { orderId: order.body.data.id as string, paymentId: payment.body.data.id as string };

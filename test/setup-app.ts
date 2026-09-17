@@ -3,7 +3,6 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import cookieParser from 'cookie-parser';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -30,7 +29,6 @@ export async function createTestApp(): Promise<TestContext> {
   process.env.NODE_ENV = 'test';
   process.env.MONGO_URI = replSet.getUri('store_test');
   process.env.JWT_SECRET = 'test-secret-that-is-definitely-long-enough-32';
-  process.env.COOKIE_SECRET = 'test-cookie-secret-also-long-enough-for-joi-32';
   process.env.ACCESS_TOKEN_TTL = '15m';
   process.env.REFRESH_TOKEN_TTL = '30d';
   // Lowest bcrypt cost the config allows — this suite hashes a lot.
@@ -77,8 +75,6 @@ export async function createTestApp(): Promise<TestContext> {
   });
 
   // Mirrors main.ts. If these diverge, the suite stops testing what ships.
-  // Guest identity depends on signed cookies, so the parser must be here too.
-  app.use(cookieParser(process.env.COOKIE_SECRET));
   app.setGlobalPrefix('api', { exclude: ['health', 'health/liveness'] });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.useGlobalPipes(

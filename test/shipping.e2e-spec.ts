@@ -99,7 +99,7 @@ describe('Shipping & Outbox (e2e)', () => {
     const payment = await request(app.getHttpServer())
       .post(api('/payments'))
       .set('Authorization', `Bearer ${token}`)
-      .send({ orderId, method: PaymentMethod.BANK_TRANSFER })
+      .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
       .expect(201);
 
     await request(app.getHttpServer())
@@ -235,12 +235,12 @@ describe('Shipping & Outbox (e2e)', () => {
       expect(await shipmentModel.countDocuments({ orderId })).toBe(0);
     });
 
-    it('creates the shipment when payment arrives by webhook', async () => {
+    it('creates one shipment when payment arrives by webhook, not one per event', async () => {
       const orderId = await placeOrder();
       const payment = await request(app.getHttpServer())
         .post(api('/payments'))
         .set('Authorization', `Bearer ${shopperToken}`)
-        .send({ orderId, method: PaymentMethod.BANK_TRANSFER })
+        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
         .expect(201);
 
       const body = {
@@ -260,6 +260,9 @@ describe('Shipping & Outbox (e2e)', () => {
         .expect(200);
 
       await dispatcher.drain();
+      // Two confirmations reach shipping for one order — `order.confirmed` when
+      // the cash-on-delivery payment opened, then `order.paid` from the webhook
+      // capture. The upsert on orderId is what keeps that to a single parcel.
       expect(await shipmentModel.countDocuments({ orderId })).toBe(1);
     });
   });
@@ -525,11 +528,12 @@ describe('Shipping & Outbox (e2e)', () => {
         .expect(404);
     });
 
-    it('shows nothing to a caller with neither a token nor a guest cookie', async () => {
+    it('refuses to list anything for a caller with no token', async () => {
       await paidOrder();
 
-      const res = await request(app.getHttpServer()).get(api('/shipments')).expect(200);
-      expect(res.body.data.items).toHaveLength(0);
+      // Guests track a parcel through `GET /orders/lookup`, which carries the
+      // carrier and tracking number alongside the order.
+      await request(app.getHttpServer()).get(api('/shipments')).expect(401);
     });
 
     it('rejects an unlisted sort field', async () => {

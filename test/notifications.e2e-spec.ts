@@ -106,7 +106,7 @@ describe('Notifications (e2e)', () => {
     const payment = await request(app.getHttpServer())
       .post(api('/payments'))
       .set('Authorization', `Bearer ${shopperToken}`)
-      .send({ orderId, method: PaymentMethod.BANK_TRANSFER })
+      .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
       .expect(201);
 
     await request(app.getHttpServer())

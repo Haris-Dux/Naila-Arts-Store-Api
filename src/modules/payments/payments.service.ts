@@ -11,7 +11,7 @@ import {
 import { Money } from '../../common/money';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { RequestOwner, ownsRecord } from '../../common/request-owner';
+import { ownsRecord } from '../../common/ownership';
 import { OrderStatus, canTransition } from '../orders/enums/order-status.enum';
 import { OrdersService } from '../orders/orders.service';
 import { Order, OrderDocument } from '../orders/schemas/order.schema';
@@ -59,16 +59,18 @@ export class PaymentsService {
    *
    * The amount comes from the order, not the request — a client cannot choose
    * what it pays, for the same reason it cannot choose what a product costs.
+   *
+   * A guest order is accepted on its id alone: the guest has just been handed
+   * that id by checkout and holds no token, and confirming a payment method is
+   * the other half of the same transaction. An order that belongs to an account
+   * still requires that account's token, so one customer cannot confirm
+   * another's order.
    */
-  async create(
-    dto: CreatePaymentDto,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-  ): Promise<PaymentResponseDto> {
+  async create(dto: CreatePaymentDto, actor?: AuthenticatedUser): Promise<PaymentResponseDto> {
     const order = await this.getOrderOrThrow(dto.orderId);
 
     // 404, not 403: another customer's order id should not be confirmable.
-    if (!this.mayAccessOrder(owner, order, actor)) {
+    if (!this.mayConfirmOrder(order, actor)) {
       throw new ResourceNotFoundException('Order', dto.orderId);
     }
 
@@ -109,7 +111,6 @@ export class PaymentsService {
       status: result.status,
       amount: order.grandTotal,
       currency: order.currency,
-      guestToken: order.guestToken,
       instructions: result.instructions ?? null,
       events: [{ status: result.status, at: new Date(), by: null, note: 'Payment initiated' }],
     });
@@ -137,25 +138,17 @@ export class PaymentsService {
 
   // ------------------------------------------------------------------- reads
 
-  async findById(
-    id: string,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-  ): Promise<PaymentResponseDto> {
+  async findById(id: string, actor: AuthenticatedUser): Promise<PaymentResponseDto> {
     const payment = await this.getPaymentOrThrow(id);
-    if (!this.mayAccessOrder(owner, payment, actor)) {
+    if (!this.mayAccessOrder(payment, actor)) {
       throw new ResourceNotFoundException('Payment', id);
     }
     return PaymentResponseDto.from(payment);
   }
 
-  async findForOrder(
-    orderId: string,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-  ): Promise<PaymentResponseDto[]> {
+  async findForOrder(orderId: string, actor: AuthenticatedUser): Promise<PaymentResponseDto[]> {
     const order = await this.getOrderOrThrow(orderId);
-    if (!this.mayAccessOrder(owner, order, actor)) {
+    if (!this.mayAccessOrder(order, actor)) {
       throw new ResourceNotFoundException('Order', orderId);
     }
 
@@ -559,14 +552,28 @@ export class PaymentsService {
     }
   }
 
-  /** Staff, the owning customer, or the guest whose cookie placed the order. */
+  /** Staff or the owning customer. Guest records match nobody. */
   private mayAccessOrder(
-    owner: RequestOwner,
-    record: { userId: Types.ObjectId | null; guestToken: string | null },
+    record: { userId: Types.ObjectId | null },
     actor?: AuthenticatedUser,
   ): boolean {
     if (actor && roleAtLeast(actor.role, UserRole.ADMIN)) return true;
-    return ownsRecord(owner, record);
+    return ownsRecord(actor?.id, record);
+  }
+
+  /**
+   * The same, plus anybody holding the id of a *guest* order.
+   *
+   * That opening is what lets a guest confirm a payment method for the order
+   * they have just placed: they hold the id checkout returned and nothing else.
+   * Deliberately separate from `mayAccessOrder` so it cannot widen the reads —
+   * an order id would otherwise be enough to pull back a guest's payment record.
+   */
+  private mayConfirmOrder(
+    record: { userId: Types.ObjectId | null },
+    actor?: AuthenticatedUser,
+  ): boolean {
+    return record.userId === null || this.mayAccessOrder(record, actor);
   }
 
   /**

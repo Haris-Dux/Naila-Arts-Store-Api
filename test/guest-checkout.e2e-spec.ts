@@ -184,26 +184,21 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
   // ============================================================ GUEST ORDERS
 
   describe('a guest can place an order', () => {
-    /** A guest browser: the agent carries the signed guest cookie. */
-    const guest = () => request.agent(app.getHttpServer());
-
     /**
      * The basket comes from the browser, so a guest checkout is a single
      * request. Returned un-awaited so callers can assert on the status.
      */
-    const guestCheckout = (
-      agent: ReturnType<typeof guest>,
-      body: Record<string, unknown> = {},
-      quantity = 2,
-    ) =>
-      agent
+    const guestCheckout = (body: Record<string, unknown> = {}, quantity = 2) =>
+      request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
         .send({ items: [{ productId, quantity }], ...guestBody(body) });
 
+    const lookup = (orderNumber: string) =>
+      request(app.getHttpServer()).get(api('/orders/lookup')).query({ orderNumber });
+
     it('places an order with no account at all', async () => {
-      const agent = guest();
-      const res = await guestCheckout(agent);
+      const res = await guestCheckout();
       expect(res.status).toBe(201);
 
       expect(res.body.data.isGuestOrder).toBe(true);
@@ -216,13 +211,21 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       // Stock committed in the same transaction as always.
       expect((await productModel.findById(productId).exec())?.stock).toBe(18);
 
-      // And the response minted the identity that lets them come back for it.
-      expect(String(res.headers['set-cookie'])).toMatch(/guest_token=/);
-      await agent.get(api(`/orders/${res.body.data.id as string}`)).expect(200);
+      // Nothing is minted for them: the order number is the whole handle.
+      expect(res.headers['set-cookie']).toBeUndefined();
+      expect(res.body.data.orderNumber).toMatch(/^ORD-\d{8}-[0-9A-F]{8}$/);
+    });
+
+    it('stores a guest order with no owner at all', async () => {
+      const res = await guestCheckout({}, 1);
+      expect(res.status).toBe(201);
+
+      const stored = await orderModel.findById(res.body.data.id as string).exec();
+      expect(stored?.userId).toBeNull();
     });
 
     it('requires an email and a name from a guest', async () => {
-      const res = await guest()
+      const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
         .send({ shippingAddress: address, items: [{ productId, quantity: 1 }] });
@@ -232,32 +235,15 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
     });
 
     it('rejects a malformed guest email at validation', async () => {
-      await guest()
+      await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
         .send({ items: [{ productId, quantity: 1 }], ...guestBody({ email: 'not-an-email' }) })
         .expect(400);
     });
 
-    it('mints an identity for a guest who has never touched the server', async () => {
-      // Checkout is a first-time guest's very first request now, so having no
-      // cookie is the normal case rather than an error. The order still needs an
-      // owner, so one is minted here — otherwise they could never read back what
-      // they just placed.
-      const res = await request(app.getHttpServer())
-        .post(api('/orders/checkout'))
-        .set('Idempotency-Key', randomUUID())
-        .send({ items: [{ productId, quantity: 1 }], ...guestBody() })
-        .expect(201);
-
-      expect(String(res.headers['set-cookie'])).toMatch(/guest_token=/);
-      const stored = await orderModel.findById(res.body.data.id as string).exec();
-      expect(stored?.guestToken).toEqual(expect.any(String));
-      expect(stored?.userId).toBeNull();
-    });
-
     it('refuses an order with no items', async () => {
-      const res = await guest()
+      const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
         .send(guestBody());
@@ -266,36 +252,68 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       expect(JSON.stringify(res.body)).toMatch(/at least one item/i);
     });
 
-    it('lets the guest read back their own order and list it', async () => {
-      const agent = guest();
-      const order = await guestCheckout(agent);
+    it('lets the guest track the order by its number, from anywhere', async () => {
+      const order = await guestCheckout();
       expect(order.status).toBe(201);
-      const orderId = order.body.data.id as string;
 
-      await agent.get(api(`/orders/${orderId}`)).expect(200);
+      const res = await lookup(order.body.data.orderNumber as string).expect(200);
 
-      const list = await agent.get(api('/orders')).expect(200);
-      expect(list.body.data.items).toHaveLength(1);
-      expect(list.body.data.items[0].id).toBe(orderId);
+      expect(res.body.data.orderNumber).toBe(order.body.data.orderNumber);
+      expect(res.body.data.status).toBe(OrderStatus.PENDING);
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.data.grandTotal.amount).toBe(4998);
+      // Nothing has happened to it yet.
+      expect(res.body.data.payment).toBeNull();
+      expect(res.body.data.shipment).toBeNull();
     });
 
-    it("hides a guest's order from everyone else", async () => {
-      const first = guest();
-      const order = await guestCheckout(first);
+    it('matches an order number the customer typed in lower case', async () => {
+      const order = await guestCheckout();
+      expect(order.status).toBe(201);
+
+      const typed = (order.body.data.orderNumber as string).toLowerCase();
+      await lookup(typed).expect(200);
+    });
+
+    it('withholds the customer’s contact details from the tracking view', async () => {
+      const order = await guestCheckout({ customerNote: 'Leave with the neighbour' });
+      expect(order.status).toBe(201);
+
+      const res = await lookup(order.body.data.orderNumber as string).expect(200);
+
+      // An order number rides on parcels and receipts, so it identifies an order
+      // without proving who is asking. The view is built for that: enough to
+      // recognise the order, nothing a stranger could use.
+      const body = JSON.stringify(res.body);
+      expect(body).not.toMatch(/guest@example\.com/);
+      expect(body).not.toMatch(/12 Market Street/);
+      expect(body).not.toMatch(/M1 1AA/);
+      expect(body).not.toMatch(/neighbour/i);
+      expect(res.body.data.contactEmail).toBeUndefined();
+      expect(res.body.data.shippingAddress).toBeUndefined();
+
+      // What it does carry: a shortened name and the destination city.
+      expect(res.body.data.recipient).toBe('Jane D.');
+      expect(res.body.data.destination).toBe('Manchester, GB');
+    });
+
+    it('404s an order number that does not exist', async () => {
+      await lookup('ORD-20260101-DEADBEEF').expect(404);
+    });
+
+    it('needs a token to reach the order itself', async () => {
+      const order = await guestCheckout();
       expect(order.status).toBe(201);
       const orderId = order.body.data.id as string;
 
-      // A different browser — a different cookie.
-      await guest()
-        .get(api(`/orders/${orderId}`))
-        .expect(404);
-
-      // No cookie at all.
+      // The full order — addresses, contact details, status notes — is for the
+      // customer who owns it and for staff. Guests get the tracking view.
       await request(app.getHttpServer())
         .get(api(`/orders/${orderId}`))
-        .expect(404);
+        .expect(401);
 
-      // A signed-in customer who did not place it.
+      await request(app.getHttpServer()).get(api('/orders')).expect(401);
+
       const other = await makeUser('other@example.com', UserRole.USER);
       await request(app.getHttpServer())
         .get(api(`/orders/${orderId}`))
@@ -303,16 +321,8 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
         .expect(404);
     });
 
-    it('shows nothing to a browser that has never ordered', async () => {
-      expect((await guestCheckout(guest())).status).toBe(201);
-
-      // No filter must never mean "no restriction".
-      const res = await request(app.getHttpServer()).get(api('/orders')).expect(200);
-      expect(res.body.data.items).toHaveLength(0);
-    });
-
     it('lets an admin see guest orders', async () => {
-      expect((await guestCheckout(guest())).status).toBe(201);
+      expect((await guestCheckout()).status).toBe(201);
 
       const res = await request(app.getHttpServer())
         .get(api('/orders'))
@@ -323,32 +333,44 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       expect(res.body.data.items[0].isGuestOrder).toBe(true);
     });
 
-    it('lets the guest cancel, returning stock', async () => {
-      const agent = guest();
-      const order = await guestCheckout(agent);
+    it('leaves cancelling a guest order to staff, who return the stock', async () => {
+      const order = await guestCheckout();
       expect(order.status).toBe(201);
+      const orderId = order.body.data.id as string;
       expect((await productModel.findById(productId).exec())?.stock).toBe(18);
 
-      await agent
-        .post(api(`/orders/${order.body.data.id}/cancel`))
+      // Nobody can cancel on the strength of an order number: a parcel label
+      // would be enough to empty somebody else's order.
+      await request(app.getHttpServer())
+        .post(api(`/orders/${orderId}/cancel`))
+        .send({})
+        .expect(401);
+      expect((await productModel.findById(productId).exec())?.stock).toBe(18);
+
+      await request(app.getHttpServer())
+        .post(api(`/orders/${orderId}/cancel`))
+        .set('Authorization', `Bearer ${adminToken}`)
         .send({})
         .expect(201);
       expect((await productModel.findById(productId).exec())?.stock).toBe(20);
+
+      const tracked = await lookup(order.body.data.orderNumber as string).expect(200);
+      expect(tracked.body.data.status).toBe(OrderStatus.CANCELLED);
     });
 
     it('scopes idempotency per guest, not globally', async () => {
       const key = 'shared-key-value';
 
-      // Neither guest has a cookie yet, so the scope falls back to the request
-      // itself. Two different people cannot collide on a shared key value
-      // because their details differ.
-      await guest()
+      // A guest has no identity to scope by, so the scope falls back to the
+      // request itself. Two different people cannot collide on a shared key
+      // value because their details differ.
+      await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', key)
         .send({ items: [{ productId, quantity: 1 }], ...guestBody() })
         .expect(201);
 
-      const res = await guest()
+      const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', key)
         .send({
@@ -362,16 +384,15 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
     });
 
     it('replays a guest key rather than ordering twice', async () => {
-      const agent = guest();
       const key = randomUUID();
       const body = { items: [{ productId, quantity: 2 }], ...guestBody() };
 
-      const first = await agent
+      const first = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', key)
         .send(body)
         .expect(201);
-      const replay = await agent
+      const replay = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', key)
         .send(body)
@@ -383,9 +404,8 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
     });
 
     it('creates one order when a first-time guest double-submits', async () => {
-      // The riskiest case of the new flow: two concurrent requests, neither
-      // carrying a cookie, so neither has an identity to be scoped by. Scoping
-      // by the freshly minted token would give them two scopes and two orders.
+      // Two concurrent requests, neither carrying any identity, so the body is
+      // all there is to scope them by.
       const key = randomUUID();
       const body = { items: [{ productId, quantity: 2 }], ...guestBody() };
 
@@ -405,7 +425,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
     });
 
     it('emails the guest their confirmation', async () => {
-      expect((await guestCheckout(guest())).status).toBe(201);
+      expect((await guestCheckout()).status).toBe(201);
       await dispatcher.drain();
 
       const mails = sendSpy.mock.calls.map((c) => c[0] as { to: string; subject: string });
@@ -433,49 +453,32 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       expect(res.body.data.isGuestOrder).toBe(false);
       expect(res.body.data.userId).toBe(customer.id);
     });
-
-    it('prefers the token over a stale guest cookie', async () => {
-      // The agent picks up a guest cookie by ordering once as a guest.
-      const agent = guest();
-      expect((await guestCheckout(agent)).status).toBe(201);
-
-      // Same browser, now signed in: the second order is theirs, not the
-      // cookie's, so signing in cannot append to a stranger's order history.
-      const customer = await makeUser('signedin@example.com', UserRole.USER);
-      const res = await agent
-        .post(api('/orders/checkout'))
-        .set('Authorization', `Bearer ${customer.token}`)
-        .set('Idempotency-Key', randomUUID())
-        .send({ shippingAddress: address, items: [{ productId, quantity: 1 }] })
-        .expect(201);
-
-      expect(res.body.data.isGuestOrder).toBe(false);
-      expect(res.body.data.userId).toBe(customer.id);
-    });
   });
 
   // ===================================================================== COD
 
   describe('cash on delivery', () => {
-    const guest = () => request.agent(app.getHttpServer());
-
-    const placeGuestOrder = async (agent: ReturnType<typeof guest>) => {
-      const res = await agent
+    const placeGuestOrder = async () => {
+      const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
         .send({ items: [{ productId, quantity: 2 }], ...guestBody() })
         .expect(201);
-      return res.body.data.id as string;
+      return {
+        id: res.body.data.id as string,
+        orderNumber: res.body.data.orderNumber as string,
+      };
     };
 
-    it('authorizes rather than pends, because the courier collects later', async () => {
-      const agent = guest();
-      const orderId = await placeGuestOrder(agent);
-
-      const res = await agent
+    const pay = (orderId: string) =>
+      request(app.getHttpServer())
         .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
-        .expect(201);
+        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY });
+
+    it('authorizes rather than pends, because the courier collects later', async () => {
+      const order = await placeGuestOrder();
+
+      const res = await pay(order.id).expect(201);
 
       expect(res.body.data.method).toBe(PaymentMethod.CASH_ON_DELIVERY);
       expect(res.body.data.status).toBe(PaymentStatus.AUTHORIZED);
@@ -483,47 +486,41 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
     });
 
     it('creates a shipment without any money having moved', async () => {
-      const agent = guest();
-      const orderId = await placeGuestOrder(agent);
+      const order = await placeGuestOrder();
 
-      await agent
-        .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
-        .expect(201);
+      await pay(order.id).expect(201);
       await dispatcher.drain();
 
       // The whole point: a COD order that waits for a capture never ships.
-      const shipment = await shipmentModel.findOne({ orderId }).exec();
+      const shipment = await shipmentModel.findOne({ orderId: order.id }).exec();
       expect(shipment).not.toBeNull();
       expect(shipment!.status).toBe(ShipmentStatus.PENDING);
-      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.PENDING);
+      expect((await orderModel.findById(order.id).exec())?.status).toBe(OrderStatus.PENDING);
     });
 
     it('runs the whole COD lifecycle to delivery and collection', async () => {
-      const agent = guest();
-      const orderId = await placeGuestOrder(agent);
+      const order = await placeGuestOrder();
 
-      const payment = await agent
-        .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
-        .expect(201);
+      const payment = await pay(order.id).expect(201);
       await dispatcher.drain();
 
-      const shipmentId = (await shipmentModel.findOne({ orderId }).exec())!._id.toString();
+      const shipmentId = (await shipmentModel
+        .findOne({ orderId: order.id })
+        .exec())!._id.toString();
 
       await request(app.getHttpServer())
         .post(api(`/shipments/${shipmentId}/dispatch`))
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ carrier: 'Royal Mail', trackingNumber: 'RM-COD-1' })
         .expect(201);
-      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.SHIPPED);
+      expect((await orderModel.findById(order.id).exec())?.status).toBe(OrderStatus.SHIPPED);
 
       await request(app.getHttpServer())
         .patch(api(`/shipments/${shipmentId}/status`))
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ status: ShipmentStatus.DELIVERED })
         .expect(200);
-      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.DELIVERED);
+      expect((await orderModel.findById(order.id).exec())?.status).toBe(OrderStatus.DELIVERED);
 
       // The courier hands the cash in; the capture is recorded afterwards.
       const captured = await request(app.getHttpServer())
@@ -535,18 +532,14 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       expect(captured.body.data.status).toBe(PaymentStatus.CAPTURED);
       // The order stays DELIVERED: moving it to PAID would be a step backwards.
       // Money lives on the payment record, fulfilment on the order.
-      const order = await orderModel.findById(orderId).exec();
-      expect(order?.status).toBe(OrderStatus.DELIVERED);
+      const settled = await orderModel.findById(order.id).exec();
+      expect(settled?.status).toBe(OrderStatus.DELIVERED);
     });
 
     it('creates exactly one shipment even if confirmation is redelivered', async () => {
-      const agent = guest();
-      const orderId = await placeGuestOrder(agent);
+      const order = await placeGuestOrder();
 
-      await agent
-        .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
-        .expect(201);
+      await pay(order.id).expect(201);
       await dispatcher.drain();
 
       await outboxModel.updateMany(
@@ -555,55 +548,73 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       );
       await dispatcher.drain();
 
-      expect(await shipmentModel.countDocuments({ orderId })).toBe(1);
+      expect(await shipmentModel.countDocuments({ orderId: order.id })).toBe(1);
     });
 
-    it('still lets a guest track their COD shipment', async () => {
-      const agent = guest();
-      const orderId = await placeGuestOrder(agent);
-      await agent
-        .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
-        .expect(201);
+    it('tracks the parcel through the order number, not the shipment routes', async () => {
+      const order = await placeGuestOrder();
+      await pay(order.id).expect(201);
       await dispatcher.drain();
 
-      const res = await agent.get(api(`/shipments/orders/${orderId}`)).expect(200);
-      expect(res.body.data.orderId).toBe(orderId);
+      const shipmentId = (await shipmentModel
+        .findOne({ orderId: order.id })
+        .exec())!._id.toString();
+      await request(app.getHttpServer())
+        .post(api(`/shipments/${shipmentId}/dispatch`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ carrier: 'Royal Mail', trackingNumber: 'RM-COD-2' })
+        .expect(201);
 
-      // And nobody else can.
-      await guest()
-        .get(api(`/shipments/orders/${orderId}`))
-        .expect(404);
+      const res = await request(app.getHttpServer())
+        .get(api('/orders/lookup'))
+        .query({ orderNumber: order.orderNumber })
+        .expect(200);
+
+      expect(res.body.data.shipment.status).toBe(ShipmentStatus.IN_TRANSIT);
+      expect(res.body.data.shipment.carrier).toBe('Royal Mail');
+      expect(res.body.data.shipment.trackingNumber).toBe('RM-COD-2');
+      expect(res.body.data.payment.status).toBe(PaymentStatus.AUTHORIZED);
+
+      // The shipment routes themselves are for account holders and staff.
+      await request(app.getHttpServer())
+        .get(api(`/shipments/orders/${order.id}`))
+        .expect(401);
     });
 
-    it('leaves a bank transfer waiting for the money, as before', async () => {
-      const agent = guest();
-      const orderId = await placeGuestOrder(agent);
+    it('refuses a payment method no provider settles', async () => {
+      const order = await placeGuestOrder();
 
-      const res = await agent
+      // Bank transfer is gone from the enum entirely, so it fails validation;
+      // CARD survives for a future gateway but nothing settles it yet.
+      await request(app.getHttpServer())
         .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.BANK_TRANSFER })
-        .expect(201);
-      await dispatcher.drain();
+        .send({ orderId: order.id, method: 'BANK_TRANSFER' })
+        .expect(400);
 
-      expect(res.body.data.status).toBe(PaymentStatus.PENDING);
-      // Prepaid means prepaid: nothing ships until the transfer clears.
-      expect(await shipmentModel.countDocuments({ orderId })).toBe(0);
+      await request(app.getHttpServer())
+        .post(api('/payments'))
+        .send({ orderId: order.id, method: PaymentMethod.CARD })
+        .expect(400);
     });
 
-    it('lets a guest pay for their own order and nobody else’s', async () => {
-      const agent = guest();
-      const orderId = await placeGuestOrder(agent);
+    it('lets anyone holding a guest order id confirm it, but not an account order', async () => {
+      // A guest has no token, so the id checkout handed them is the only thing
+      // they can present. It is unguessable and confirming a payment method is
+      // the other half of placing the order.
+      const order = await placeGuestOrder();
+      await pay(order.id).expect(201);
 
-      await guest()
-        .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
-        .expect(404);
-
-      await agent
-        .post(api('/payments'))
-        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
+      // An order that belongs to an account is a different matter: it needs that
+      // account's token, or one customer could confirm another's order.
+      const customer = await makeUser('account@example.com', UserRole.USER);
+      const theirs = await request(app.getHttpServer())
+        .post(api('/orders/checkout'))
+        .set('Authorization', `Bearer ${customer.token}`)
+        .set('Idempotency-Key', randomUUID())
+        .send({ shippingAddress: address, items: [{ productId, quantity: 1 }] })
         .expect(201);
+
+      await pay(theirs.body.data.id as string).expect(404);
     });
   });
 });

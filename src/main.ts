@@ -4,7 +4,6 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compression from 'compression';
-import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
@@ -36,13 +35,10 @@ async function bootstrap(): Promise<void> {
 
   app.use(helmet({ contentSecurityPolicy: isProduction ? undefined : false }));
   app.use(compression());
-  // Signed cookies carry the guest token, so a client cannot claim another
-  // guest's order by editing the value.
-  app.use(cookieParser(config.getOrThrow<string>('app.cookieSecret')));
-  // Only the store's own sites, from CORS_ORIGINS. Credentials stay on for the
-  // guest-checkout cookie — which is exactly why the list is explicit: browsers
-  // refuse a credentialed response to a wildcard origin, and echoing back any
-  // caller would let every other website read a guest's orders.
+  // Only the store's own sites, from CORS_ORIGINS. Credentials stay on so a
+  // browser may send the Authorization header from the dashboard's own origin;
+  // the list is explicit because browsers refuse a credentialed response to a
+  // wildcard origin.
   app.enableCors({
     origin: corsOrigins,
     credentials: true,

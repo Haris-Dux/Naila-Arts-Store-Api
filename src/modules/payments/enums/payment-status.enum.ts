@@ -12,8 +12,8 @@ export enum PaymentStatus {
 }
 
 export enum PaymentMethod {
-  BANK_TRANSFER = 'BANK_TRANSFER',
   CASH_ON_DELIVERY = 'CASH_ON_DELIVERY',
+  /** No provider supports this yet; it is here for the gateway that will. */
   CARD = 'CARD',
 }
 

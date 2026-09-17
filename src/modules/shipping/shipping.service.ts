@@ -8,7 +8,7 @@ import {
 } from '../../common/exceptions/domain.exception';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { RequestOwner, ownsRecord } from '../../common/request-owner';
+import { ownsRecord } from '../../common/ownership';
 import { OrderStatus } from '../orders/enums/order-status.enum';
 import { OrdersService } from '../orders/orders.service';
 import { OutboxService } from '../outbox/outbox.service';
@@ -70,7 +70,6 @@ export class ShippingService {
             orderId: order._id,
             orderNumber: order.orderNumber,
             userId: order.userId,
-            guestToken: order.guestToken,
             status: ShipmentStatus.PENDING,
             shippingAddress: order.shippingAddress,
             items: order.items.map((item) => ({
@@ -102,21 +101,16 @@ export class ShippingService {
 
   async list(
     query: ListShipmentsDto,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
+    actor: AuthenticatedUser,
   ): Promise<Page<ShipmentResponseDto>> {
-    const staff = actor ? roleAtLeast(actor.role, UserRole.ADMIN) : false;
+    const staff = roleAtLeast(actor.role, UserRole.ADMIN);
 
     const filter: FilterQuery<ShipmentDocument> = { ...notDeleted };
     if (staff) {
       if (query.userId) filter.userId = new Types.ObjectId(query.userId);
-    } else if (owner.userId) {
-      // Built from the token, so the query parameter cannot widen it.
-      filter.userId = new Types.ObjectId(owner.userId);
-    } else if (owner.guestToken) {
-      filter.guestToken = owner.guestToken;
     } else {
-      return Page.of([], 0, query.page, query.limit);
+      // Built from the token, so the query parameter cannot widen it.
+      filter.userId = new Types.ObjectId(actor.id);
     }
     if (query.status) filter.status = query.status;
 
@@ -133,21 +127,13 @@ export class ShippingService {
     return Page.of(documents.map(ShipmentResponseDto.from), total, query.page, query.limit);
   }
 
-  async findById(
-    id: string,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-  ): Promise<ShipmentResponseDto> {
+  async findById(id: string, actor: AuthenticatedUser): Promise<ShipmentResponseDto> {
     const shipment = await this.getDocumentOrThrow(id);
-    this.assertMayView(owner, shipment, actor);
+    this.assertMayView(shipment, actor);
     return ShipmentResponseDto.from(shipment);
   }
 
-  async findByOrder(
-    orderId: string,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-  ): Promise<ShipmentResponseDto> {
+  async findByOrder(orderId: string, actor: AuthenticatedUser): Promise<ShipmentResponseDto> {
     if (!Types.ObjectId.isValid(orderId)) throw new ResourceNotFoundException('Shipment', orderId);
 
     const shipment = await this.shipmentModel
@@ -155,7 +141,7 @@ export class ShippingService {
       .exec();
     if (!shipment) throw new ResourceNotFoundException('Shipment for order', orderId);
 
-    this.assertMayView(owner, shipment, actor);
+    this.assertMayView(shipment, actor);
     return ShipmentResponseDto.from(shipment);
   }
 
@@ -315,13 +301,9 @@ export class ShippingService {
   }
 
   /** 404 rather than 403 for someone else's shipment, so ids cannot be probed. */
-  private assertMayView(
-    owner: RequestOwner,
-    shipment: ShipmentDocument,
-    actor?: AuthenticatedUser,
-  ): void {
-    if (actor && roleAtLeast(actor.role, UserRole.ADMIN)) return;
-    if (ownsRecord(owner, shipment)) return;
+  private assertMayView(shipment: ShipmentDocument, actor: AuthenticatedUser): void {
+    if (roleAtLeast(actor.role, UserRole.ADMIN)) return;
+    if (ownsRecord(actor.id, shipment)) return;
     throw new ResourceNotFoundException('Shipment', shipment._id.toString());
   }
 }

@@ -1,9 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
-import { readRequestOwner } from '../../common/request-owner';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { Public } from '../auth/decorators/public.decorator';
 import { MinRole } from '../auth/decorators/roles.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -20,9 +17,9 @@ import { ShippingService } from './shipping.service';
  * — paid up front, or accepted for cash on delivery — so it is created by the
  * outbox handlers and nothing else.
  *
- * The customer-facing routes are @Public() so a guest can track an order they
- * placed without an account; ownership is proved by the same signed cookie that
- * placed the order.
+ * Every route here needs a token. A guest has none, and tracks their parcel
+ * through `GET /orders/lookup`, which carries the carrier, tracking number and
+ * delivery dates alongside the order.
  */
 @ApiTags('shipping')
 @Controller('shipments')
@@ -30,41 +27,29 @@ export class ShippingController {
   constructor(private readonly shippingService: ShippingService) {}
 
   @Get()
-  @Public()
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'List shipments — your own, or all for staff' })
   @ApiResponse({ status: 200, description: 'Paginated shipments' })
-  list(
-    @Query() query: ListShipmentsDto,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
-    return this.shippingService.list(query, readRequestOwner(request), actor);
+  list(@Query() query: ListShipmentsDto, @CurrentUser() actor: AuthenticatedUser) {
+    return this.shippingService.list(query, actor);
   }
 
   @Get(':id')
-  @Public()
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get a shipment' })
   @ApiResponse({ status: 200, type: ShipmentResponseDto })
   @ApiResponse({ status: 404, description: 'Not found, or not yours' })
-  findOne(
-    @Param('id') id: string,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
-    return this.shippingService.findById(id, readRequestOwner(request), actor);
+  findOne(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.shippingService.findById(id, actor);
   }
 
   @Get('orders/:orderId')
-  @Public()
-  @ApiOperation({ summary: 'Track the shipment for an order (guest or signed in)' })
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Track the shipment for an order' })
   @ApiResponse({ status: 200, type: ShipmentResponseDto })
   @ApiResponse({ status: 404, description: 'No shipment yet — the order is not confirmed' })
-  findByOrder(
-    @Param('orderId') orderId: string,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
-    return this.shippingService.findByOrder(orderId, readRequestOwner(request), actor);
+  findByOrder(@Param('orderId') orderId: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.shippingService.findByOrder(orderId, actor);
   }
 
   @Post(':id/dispatch')

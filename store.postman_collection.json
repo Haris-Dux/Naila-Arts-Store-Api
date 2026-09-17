@@ -2,7 +2,7 @@
   "info": {
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "name": "Store — customer API",
-    "description": "Every API the customer-facing store (website or app) integrates — nothing admin-only.\n\n**Base URL:** `{{baseUrl}}`, e.g. `https://api.yourshop.pk/api/v1`.\n\n**Responses** are wrapped: `{ \"success\": true, \"data\": ... }`. Lists put their rows in `data.items` and paging in `data.meta`.\n**Errors** look like `{ \"success\": false, \"code\": \"...\", \"message\": \"...\", \"details\": ... }` with the matching HTTP status.\n\n**Signing in:** Register or Log in returns an `accessToken` (15 minutes) and a `refreshToken` (30 days). Send `Authorization: Bearer <accessToken>`; on a 401, call Refresh tokens and retry.\n**Guests** can check out without an account. The server then identifies them with an httpOnly `guest_token` cookie, so web clients must send requests with `credentials: \"include\"`.\n**Money:** every amount is an integer in the currency's smallest unit — see Store config. Display the `formatted` string or divide by 10^`minorUnitExponent`.\n**Rate limits:** 300 requests a minute per client; sign-in, registration, token refresh and password change 10 a minute; checkout 20 a minute. Over the limit is a 429.\n\n**Running this collection:** run the folders top to bottom — each request hands ids to the next through collection variables. The shop needs at least one published, in-stock product."
+    "description": "Every API the customer-facing store (website or app) integrates — nothing admin-only.\n\n**Base URL:** `{{baseUrl}}`, e.g. `https://api.yourshop.pk/api/v1`.\n\n**Responses** are wrapped: `{ \"success\": true, \"data\": ... }`. Lists put their rows in `data.items` and paging in `data.meta`.\n**Errors** look like `{ \"success\": false, \"code\": \"...\", \"message\": \"...\", \"details\": ... }` with the matching HTTP status.\n\n**Signing in:** Register or Log in returns an `accessToken` (15 minutes) and a `refreshToken` (30 days). Send `Authorization: Bearer <accessToken>`; on a 401, call Refresh tokens and retry.\n**Guests** can check out without an account. Nothing identifies them afterwards — no cookie, no login — so keep the `orderNumber` the checkout returns: it is what tracks the order later, from any browser, through `GET /orders/lookup`.\n**Money:** every amount is an integer in the currency's smallest unit — see Store config. Display the `formatted` string or divide by 10^`minorUnitExponent`.\n**Rate limits:** 300 requests a minute per client; sign-in, registration, token refresh and password change 10 a minute; checkout 20 a minute. Over the limit is a 429.\n\n**Running this collection:** run the folders top to bottom — each request hands ids to the next through collection variables. The shop needs at least one published, in-stock product."
   },
   "item": [
     {
@@ -857,7 +857,7 @@
                 }
               ]
             },
-            "description": "The customer's orders, newest first.\n\n**Auth:** Bearer token (a guest's `guest_token` cookie lists the guest's orders).\n**Query (all optional):** `page`, `limit`, `status` (e.g. `PENDING`), `sort` — `createdAt`, `placedAt`, `grandTotal` or `status` — and `order`.\n**Returns:** `items` and page `meta`."
+            "description": "The customer's orders, newest first.\n\n**Auth:** Bearer token — required. A guest order belongs to no account and never appears here; it is reached one at a time by its number through **Track the guest order**.\n**Query (all optional):** `page`, `limit`, `status` (e.g. `PENDING`), `sort` — `createdAt`, `placedAt`, `grandTotal` or `status` — and `order`.\n**Returns:** `items` and page `meta`."
           },
           "event": [
             {
@@ -893,7 +893,7 @@
                 "{{orderId}}"
               ]
             },
-            "description": "One order with its items, totals, addresses and `statusHistory`.\n\n**Auth:** Bearer token, or the guest cookie for a guest order. Someone else's order is a 404.\n**Order statuses:** `PENDING` (awaiting payment) → `PAID` → `FULFILLING` → `SHIPPED` → `DELIVERED`; or `CANCELLED` / `REFUNDED`. A cash-on-delivery order goes from `PENDING` straight to `FULFILLING`."
+            "description": "One order with its items, totals, addresses and `statusHistory`.\n\n**Auth:** Bearer token — required. Someone else's order is a 404, and a guest order is reached through **Track the guest order** instead.\n**Order statuses:** `PENDING` (awaiting payment) → `PAID` → `FULFILLING` → `SHIPPED` → `DELIVERED`; or `CANCELLED` / `REFUNDED`. A cash-on-delivery order goes from `PENDING` straight to `FULFILLING`."
           },
           "event": [
             {
@@ -912,10 +912,10 @@
     },
     {
       "name": "5. Payment",
-      "description": "After checkout, the customer chooses how to pay. The amount always comes from the order.",
+      "description": "After checkout, the customer chooses how to pay. The amount always comes from the order.\n\nCash on delivery is the only method the shop settles today. `CARD` is reserved for a payment gateway and is rejected until one is connected.",
       "item": [
         {
-          "name": "Pay by bank transfer",
+          "name": "Pay cash on delivery",
           "request": {
             "method": "POST",
             "header": [
@@ -937,10 +937,10 @@
                 "payments"
               ]
             },
-            "description": "Starts payment for an order.\n\n**Auth:** Bearer token (the guest cookie for a guest order).\n**Body:** `orderId`, `method` — `BANK_TRANSFER` or `CASH_ON_DELIVERY`.\n**Returns:** the payment, with its `status` and `instructions`:\n- **Bank transfer** — `instructions` holds `bankName`, `accountName`, `accountNumber` and the `paymentReference` the customer must quote. Show these. The payment stays `PENDING` until the shop confirms the money arrived; the order then becomes `PAID`.\n- **Cash on delivery** — the payment is `AUTHORIZED` at once and the order moves to fulfilment; the courier collects the money.\n\nAn order that is not awaiting payment is a 409.",
+            "description": "Starts payment for an order.\n\n**Auth:** Bearer token. A *guest* order carries no owner, so it is accepted on the order id alone — see **7. Guest checkout**.\n**Body:** `orderId`, `method` — `CASH_ON_DELIVERY`.\n**Returns:** the payment, `AUTHORIZED` straight away, with `instructions` carrying the `paymentReference` for the courier paperwork. The order moves to fulfilment and the courier collects the money; the shop records the capture afterwards, which is when the payment becomes `CAPTURED`.\n\nAn order that is not awaiting payment is a 409. A `method` the shop does not settle is a 400.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"method\": \"BANK_TRANSFER\"\n}",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"method\": \"CASH_ON_DELIVERY\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -958,8 +958,8 @@
                   "const d = pm.response.json().data;",
                   "pm.collectionVariables.set('paymentId', d.id);",
                   "pm.test('amount comes from the order', () => pm.expect(d.amount.amount).to.eql(Number(pm.collectionVariables.get('orderTotal'))));",
-                  "pm.test('bank details to show the customer', () => pm.expect(d.instructions.paymentReference).to.be.a('string'));",
-                  "pm.test('pending until the transfer clears', () => pm.expect(d.status).to.eql('PENDING'));"
+                  "pm.test('reference for the paperwork', () => pm.expect(d.instructions.paymentReference).to.be.a('string'));",
+                  "pm.test('authorized, because the courier collects later', () => pm.expect(d.status).to.eql('AUTHORIZED'));"
                 ]
               }
             }
@@ -985,7 +985,7 @@
                 "{{paymentId}}"
               ]
             },
-            "description": "One payment's current state — poll it on an order-confirmation page.\n\n**Auth:** Bearer token, or the guest cookie.\n**Payment statuses:** `PENDING`, `AUTHORIZED`, `CAPTURED` (money received), `FAILED`, `CANCELLED`, `REFUNDED`, `PARTIALLY_REFUNDED`."
+            "description": "One payment's current state — poll it on an order-confirmation page.\n\n**Auth:** Bearer token. Guests read the payment status from **Track the guest order** instead.\n**Payment statuses:** `PENDING`, `AUTHORIZED` (cash on delivery starts here), `CAPTURED` (money received), `FAILED`, `CANCELLED`, `REFUNDED`, `PARTIALLY_REFUNDED`."
           },
           "event": [
             {
@@ -1021,7 +1021,7 @@
                 "{{orderId}}"
               ]
             },
-            "description": "Every payment attempt made for one order, e.g. to show the bank details again later.\n\n**Auth:** Bearer token, or the guest cookie."
+            "description": "Every payment attempt made for one order.\n\n**Auth:** Bearer token. Guests read the payment status from **Track the guest order** instead."
           },
           "event": [
             {
@@ -1068,7 +1068,7 @@
                 "cancel"
               ]
             },
-            "description": "Cancels the order and returns its items to stock.\n\n**Auth:** Bearer token, or the guest cookie for a guest order.\n**Body (optional):** `reason` — up to 500 characters.\n**Returns:** the order, now `CANCELLED`. Only `PENDING` or `PAID` orders can be cancelled here; after that it is a 403 and the customer has to contact the shop.",
+            "description": "Cancels the order and returns its items to stock.\n\n**Auth:** Bearer token — required, and the order must be the caller's own. A guest order cannot be cancelled this way: an order number is printed on parcels and receipts, so it is not proof of anything. Guests contact the shop, and staff cancel it.\n**Body (optional):** `reason` — up to 500 characters.\n**Returns:** the order, now `CANCELLED`. Only `PENDING` or `PAID` orders can be cancelled here; after that it is a 403 and the customer has to contact the shop.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"reason\": \"Ordered the wrong colour\"\n}",
@@ -1096,7 +1096,7 @@
     },
     {
       "name": "7. Guest checkout",
-      "description": "Buying without an account. The guest is identified by a cookie the server sets at checkout, so web clients must send cookies: `fetch(url, { credentials: \"include\" })`.",
+      "description": "Buying without an account.\n\nNothing identifies a guest on the server — there is no cookie and no login. The **order number** is the handle: it comes back from checkout, it is in the confirmation email, and it looks the order up from any browser or device, for as long as the order exists.",
       "item": [
         {
           "name": "Checkout as a guest",
@@ -1122,7 +1122,7 @@
                 "checkout"
               ]
             },
-            "description": "The same checkout without signing in.\n\n**Auth:** none.\n**Headers:** `Idempotency-Key` *(required)* — as for **Checkout**.\n**Body:** the same as **Checkout**, plus `email` and `name` *(both required for a guest)* — the order confirmation is emailed there.\n\n**Returns:** the order (`isGuestOrder: true`). The response also sets an httpOnly `guest_token` cookie, valid for 30 days. It is how this guest reads, pays for, cancels and tracks the order — keep sending it.",
+            "description": "The same checkout without signing in.\n\n**Auth:** none.\n**Headers:** `Idempotency-Key` *(required)* — as for **Checkout**.\n**Body:** the same as **Checkout**, plus `email` and `name` *(both required for a guest)* — the order confirmation is emailed there.\n\n**Returns:** the order (`isGuestOrder: true`). Keep two things from the response: `orderNumber`, which the customer uses to track the order later, and `id`, which the next request needs to confirm payment.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"items\": {{checkoutItems}},\n  \"email\": \"guest+{{$timestamp}}@example.com\",\n  \"name\": \"Bilal Ahmed\",\n  \"shippingAddress\": {\n    \"fullName\": \"Bilal Ahmed\",\n    \"line1\": \"Flat 3, Block B, Gulberg III\",\n    \"city\": \"Lahore\",\n    \"postalCode\": \"54660\",\n    \"country\": \"PK\",\n    \"phone\": \"+92 300 1234567\"\n  }\n}",
@@ -1142,29 +1142,36 @@
                   "pm.test('201', () => pm.response.to.have.status(201));",
                   "const d = pm.response.json().data;",
                   "pm.collectionVariables.set('guestOrderId', d.id);",
+                  "pm.collectionVariables.set('guestOrderNumber', d.orderNumber);",
                   "pm.test('placed without an account', () => pm.expect(d.isGuestOrder).to.be.true);",
-                  "pm.test('guest cookie set', () => pm.expect(pm.cookies.has('guest_token')).to.be.true);"
+                  "pm.test('the order number is the handle on it', () => pm.expect(d.orderNumber).to.be.a('string'));"
                 ]
               }
             }
           ]
         },
         {
-          "name": "View guest order",
+          "name": "Track the guest order",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/orders/{{guestOrderId}}",
+              "raw": "{{baseUrl}}/orders/lookup?orderNumber={{guestOrderNumber}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "orders",
-                "{{guestOrderId}}"
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "orderNumber",
+                  "value": "{{guestOrderNumber}}"
+                }
               ]
             },
-            "description": "The guest reads their order back — the same endpoint as **Get order**.\n\n**Auth:** the `guest_token` cookie from checkout; no token. Without the cookie it is a 404."
+            "description": "Tracks an order by its number, with no account and no cookie. This is what a \"where is my order?\" page calls.\n\n**Auth:** none. Rate-limited, and an unknown number is a 404.\n**Returns:** a reduced view — `status`, the items, the totals, `payment.status`, and `shipment` with the carrier and tracking number once it is dispatched.\n\nDeliberately **not** returned: the email address, phone number, street address or customer note. An order number travels on parcels and receipts, so it identifies an order without proving who is asking; the recipient is shortened to `Jane D.` and the destination to `Lahore, PK`. For the full order, sign in and use **Get order**."
           },
           "event": [
             {
@@ -1173,7 +1180,12 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
-                  "pm.test('the guest order', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('guestOrderId')));"
+                  "const d = pm.response.json().data;",
+                  "pm.test('the guest order', () => pm.expect(d.orderNumber).to.eql(pm.collectionVariables.get('guestOrderNumber')));",
+                  "pm.test('no contact details in a public view', () => {",
+                  "  pm.expect(d.contactEmail).to.be.undefined;",
+                  "  pm.expect(d.shippingAddress).to.be.undefined;",
+                  "});"
                 ]
               }
             }
@@ -1198,7 +1210,7 @@
                 "payments"
               ]
             },
-            "description": "Cash on delivery for the guest order — the same endpoint as **Pay by bank transfer**, with `method: \"CASH_ON_DELIVERY\"`.\n\n**Auth:** the guest cookie.\n**Returns:** the payment, `AUTHORIZED` — the order goes to fulfilment and the courier collects the money.",
+            "description": "Cash on delivery for the guest order — the same endpoint as **Pay cash on delivery** in **5. Payment**.\n\n**Auth:** none. A guest order belongs to no account, so the order `id` returned by checkout is what identifies it. An order that belongs to an account still needs that account's token.\n**Returns:** the payment, `AUTHORIZED` — the order goes to fulfilment and the courier collects the money.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"orderId\": \"{{guestOrderId}}\",\n  \"method\": \"CASH_ON_DELIVERY\"\n}",
@@ -1226,25 +1238,30 @@
     },
     {
       "name": "8. Delivery tracking",
-      "description": "A shipment is created automatically a few seconds after an order is confirmed (paid, or cash on delivery). Before that, tracking returns 404.",
+      "description": "A shipment is created automatically a few seconds after an order is confirmed (paid, or cash on delivery). Before that, tracking returns 404.\n\nThese routes are for signed-in customers and staff. A guest tracks their parcel through **Track the guest order**, which carries the same carrier and tracking details.",
       "item": [
         {
           "name": "Track an order's shipment",
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
             "url": {
-              "raw": "{{baseUrl}}/shipments/orders/{{guestOrderId}}",
+              "raw": "{{baseUrl}}/shipments/orders/{{orderId}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "shipments",
                 "orders",
-                "{{guestOrderId}}"
+                "{{orderId}}"
               ]
             },
-            "description": "The shipment for one order — its `status`, plus the carrier and tracking details once the shop dispatches it.\n\n**Auth:** Bearer token, or the guest cookie.\n**Shipment statuses:** `PENDING`, `PREPARING`, `IN_TRANSIT`, `DELIVERED`, `FAILED` (delivery attempt failed), `RETURNED`, `CANCELLED`.\n\nA 404 just after payment means the shipment has not been created yet — try again shortly."
+            "description": "The shipment for one order — its `status`, plus the carrier and tracking details once the shop dispatches it.\n\n**Auth:** Bearer token; the order must be the caller's own. Guests use **Track the guest order**.\n**Shipment statuses:** `PENDING`, `PREPARING`, `IN_TRANSIT`, `DELIVERED`, `FAILED` (delivery attempt failed), `RETURNED`, `CANCELLED`.\n\nA 404 just after payment means the shipment has not been created yet — try again shortly."
           },
           "event": [
             {
@@ -1274,7 +1291,12 @@
           "name": "Get shipment",
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/shipments/{{shipmentId}}",
               "host": [
@@ -1285,7 +1307,7 @@
                 "{{shipmentId}}"
               ]
             },
-            "description": "One shipment by `id`.\n\n**Auth:** Bearer token, or the guest cookie."
+            "description": "One shipment by `id`.\n\n**Auth:** Bearer token."
           },
           "event": [
             {
@@ -1304,7 +1326,12 @@
           "name": "My shipments",
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/shipments?page=1&limit=10",
               "host": [
@@ -1324,7 +1351,7 @@
                 }
               ]
             },
-            "description": "All of the customer's shipments, newest first.\n\n**Auth:** Bearer token, or the guest cookie (this request sends only the cookie, so it lists the guest's).\n**Query (all optional):** `page`, `limit`, `status`, `order`."
+            "description": "All of the customer's shipments, newest first.\n\n**Auth:** Bearer token.\n**Query (all optional):** `page`, `limit`, `status`, `order`."
           },
           "event": [
             {
@@ -1686,6 +1713,10 @@
     },
     {
       "key": "guestOrderId",
+      "value": ""
+    },
+    {
+      "key": "guestOrderNumber",
       "value": ""
     },
     {

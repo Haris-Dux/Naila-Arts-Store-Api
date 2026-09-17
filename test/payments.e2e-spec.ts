@@ -88,7 +88,7 @@ describe('Payments (e2e)', () => {
 
   const startPayment = (
     orderId: string,
-    method: PaymentMethod = PaymentMethod.BANK_TRANSFER,
+    method: PaymentMethod = PaymentMethod.CASH_ON_DELIVERY,
     token = shopperToken,
   ) =>
     request(app.getHttpServer())
@@ -141,15 +141,17 @@ describe('Payments (e2e)', () => {
   // ------------------------------------------------------------------- A4
 
   describe('a payment step exists (A4)', () => {
-    it('opens a payment carrying the order total and transfer instructions', async () => {
+    it('opens a payment carrying the order total and the collection instructions', async () => {
       const order = await placeOrder();
       const res = await startPayment(order.id).expect(201);
 
-      expect(res.body.data.status).toBe(PaymentStatus.PENDING);
+      // Authorized, not pending: the customer has committed and the courier
+      // will collect, so fulfilment need not wait for the money.
+      expect(res.body.data.status).toBe(PaymentStatus.AUTHORIZED);
       expect(res.body.data.amount.amount).toBe(order.total);
       expect(res.body.data.provider).toBe('manual');
+      expect(res.body.data.instructions.method).toBe(PaymentMethod.CASH_ON_DELIVERY);
       expect(res.body.data.instructions.paymentReference).toBeDefined();
-      expect(res.body.data.instructions.bankName).toBeDefined();
     });
 
     it('takes the amount from the order, not the request', async () => {
@@ -160,7 +162,7 @@ describe('Payments (e2e)', () => {
       await request(app.getHttpServer())
         .post(api('/payments'))
         .set('Authorization', `Bearer ${shopperToken}`)
-        .send({ orderId: order.id, method: PaymentMethod.BANK_TRANSFER, amount: 1 })
+        .send({ orderId: order.id, method: PaymentMethod.CASH_ON_DELIVERY, amount: 1 })
         .expect(400);
     });
 
@@ -168,13 +170,13 @@ describe('Payments (e2e)', () => {
       const order = await placeOrder();
       const payment = await startPayment(order.id).expect(201);
 
-      // Still PENDING while awaiting funds.
+      // Still PENDING while the cash is uncollected.
       expect((await orderModel.findById(order.id).exec())?.status).toBe(OrderStatus.PENDING);
 
       await request(app.getHttpServer())
         .post(api(`/payments/${payment.body.data.id}/capture`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ note: 'Bank transfer cleared' })
+        .send({ note: 'Cash collected on delivery' })
         .expect(201);
 
       const settled = await orderModel.findById(order.id).exec();
@@ -198,12 +200,23 @@ describe('Payments (e2e)', () => {
       expect(messages[0].aggregateId.toString()).toBe(order.id);
     });
 
-    it('supports cash on delivery', async () => {
+    it('confirms the order so fulfilment can start before any money moves', async () => {
       const order = await placeOrder();
-      const res = await startPayment(order.id, PaymentMethod.CASH_ON_DELIVERY).expect(201);
+      await startPayment(order.id).expect(201);
 
-      expect(res.body.data.method).toBe(PaymentMethod.CASH_ON_DELIVERY);
-      expect(res.body.data.instructions.method).toBe(PaymentMethod.CASH_ON_DELIVERY);
+      // The courier collects at the door, so shipping is told to begin now
+      // rather than waiting for a capture that cannot happen yet.
+      const messages = await outboxModel.find({ eventType: 'order.confirmed' }).exec();
+      expect(messages).toHaveLength(1);
+      expect(messages[0].aggregateId.toString()).toBe(order.id);
+    });
+
+    it('rejects a payment method no provider supports', async () => {
+      const order = await placeOrder();
+
+      // CARD is declared for the gateway that will come later; nothing settles
+      // it today, and the enum no longer carries BANK_TRANSFER at all.
+      await startPayment(order.id, PaymentMethod.CARD).expect(400);
     });
 
     it('refuses to pay for an order that is not awaiting payment', async () => {
@@ -252,13 +265,17 @@ describe('Payments (e2e)', () => {
 
     it('rejects a webhook with no signature', async () => {
       await postWebhook(captureEvent(), undefined).expect(401);
-      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(PaymentStatus.PENDING);
+      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(
+        PaymentStatus.AUTHORIZED,
+      );
     });
 
     it('rejects a forged signature', async () => {
       const body = captureEvent();
       await postWebhook(body, 't=1,v1=deadbeef').expect(401);
-      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(PaymentStatus.PENDING);
+      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(
+        PaymentStatus.AUTHORIZED,
+      );
     });
 
     it('rejects a signature made with the wrong secret', async () => {
@@ -364,7 +381,9 @@ describe('Payments (e2e)', () => {
       // Unparseable into a known status, so it fails verification rather than
       // being guessed at.
       await postWebhook(body, sign(body).signature).expect(401);
-      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(PaymentStatus.PENDING);
+      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(
+        PaymentStatus.AUTHORIZED,
+      );
     });
 
     it('leaves the order payable after a failed payment', async () => {
@@ -493,7 +512,7 @@ describe('Payments (e2e)', () => {
       const order = await placeOrder();
       const other = await makeUser('nosy2@example.com', UserRole.USER);
 
-      await startPayment(order.id, PaymentMethod.BANK_TRANSFER, other.token).expect(404);
+      await startPayment(order.id, PaymentMethod.CASH_ON_DELIVERY, other.token).expect(404);
     });
 
     it('lets a customer see their own payment and an admin see any', async () => {
@@ -530,7 +549,7 @@ describe('Payments (e2e)', () => {
       // nothing — 404 rather than 401, so order ids stay unprobeable.
       await request(app.getHttpServer())
         .post(api('/payments'))
-        .send({ orderId: order.id, method: PaymentMethod.BANK_TRANSFER })
+        .send({ orderId: order.id, method: PaymentMethod.CASH_ON_DELIVERY })
         .expect(404);
     });
   });

@@ -10,7 +10,7 @@ import { ProductsService } from '../products/products.service';
 import { SizesService } from '../sizes/sizes.service';
 import { InventoryService, StockLine } from '../inventory/inventory.service';
 import { OutboxService } from '../outbox/outbox.service';
-import { RequestOwner } from '../../common/request-owner';
+import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { UsersService } from '../users/users.service';
 import { CheckoutDto, CheckoutItemDto, MAX_LINE_QUANTITY } from './dto/checkout.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
@@ -60,15 +60,18 @@ export class CheckoutService {
    * `withTransaction` also retries automatically on a transient write conflict,
    * which is what two customers checking out the same product produce.
    */
-  async checkout(owner: RequestOwner, dto: CheckoutDto): Promise<OrderResponseDto> {
-    const contact = await this.resolveContact(owner, dto);
+  async checkout(
+    actor: AuthenticatedUser | undefined,
+    dto: CheckoutDto,
+  ): Promise<OrderResponseDto> {
+    const contact = await this.resolveContact(actor, dto);
     const session = await this.connection.startSession();
 
     try {
       let placed: OrderDocument | undefined;
 
       await session.withTransaction(async () => {
-        placed = await this.placeOrder(owner, contact, dto, session);
+        placed = await this.placeOrder(actor, contact, dto, session);
       });
 
       // withTransaction only returns after a successful commit.
@@ -82,7 +85,7 @@ export class CheckoutService {
       );
 
       this.logger.log(
-        `Order ${order.orderNumber} placed by ${owner.userId ?? 'guest'}: ` +
+        `Order ${order.orderNumber} placed by ${actor?.id ?? 'guest'}: ` +
           `${order.items.length} line(s), ` +
           `${Money.fromMinor(order.grandTotal, order.currency).format()}`,
       );
@@ -101,20 +104,13 @@ export class CheckoutService {
    * account to read them from and an order nobody can be told about is useless.
    */
   private async resolveContact(
-    owner: RequestOwner,
+    actor: AuthenticatedUser | undefined,
     dto: CheckoutDto,
   ): Promise<{ email: string; name: string }> {
-    if (owner.userId) {
-      const user = await this.usersService.findActiveById(owner.userId);
+    if (actor) {
+      const user = await this.usersService.findActiveById(actor.id);
       if (!user) throw new ValidationFailedException('Your account is no longer active');
       return { email: user.email, name: user.name };
-    }
-
-    if (!owner.guestToken) {
-      // The controller mints a token for a caller who has neither, so this is
-      // unreachable through the API — kept because the service is a public
-      // entry point and an order with no owner is unrecoverable.
-      throw new ValidationFailedException('Could not identify the shopper placing this order');
     }
 
     if (!dto.email || !dto.name) {
@@ -128,7 +124,7 @@ export class CheckoutService {
   }
 
   private async placeOrder(
-    owner: RequestOwner,
+    actor: AuthenticatedUser | undefined,
     contact: { email: string; name: string },
     dto: CheckoutDto,
     session: ClientSession,
@@ -197,9 +193,9 @@ export class CheckoutService {
       [
         {
           orderNumber: CheckoutService.generateOrderNumber(),
-          // From the token or the signed cookie. Never from the request body.
-          userId: owner.userId ? new Types.ObjectId(owner.userId) : null,
-          guestToken: owner.userId ? null : owner.guestToken,
+          // From the token, never from the request body. Null for a guest, whose
+          // only handle on this order is its number.
+          userId: actor ? new Types.ObjectId(actor.id) : null,
           contactEmail: contact.email,
           contactName: contact.name,
           status: OrderStatus.PENDING,
@@ -232,7 +228,7 @@ export class CheckoutService {
         payload: {
           orderId: order._id.toString(),
           orderNumber: order.orderNumber,
-          userId: owner.userId,
+          userId: actor?.id ?? null,
           email: order.contactEmail,
           currency: order.currency,
           grandTotal: order.grandTotal,

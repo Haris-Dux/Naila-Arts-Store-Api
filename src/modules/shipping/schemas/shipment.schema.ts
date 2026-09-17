@@ -62,10 +62,6 @@ export class Shipment extends BaseSchemaClass {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null, index: true })
   userId!: Types.ObjectId | null;
 
-  /** Mirrors the order's guest token, so a guest can reach their own shipment. */
-  @Prop({ type: String, default: null })
-  guestToken!: string | null;
-
   @Prop({
     type: String,
     enum: Object.values(ShipmentStatus),
@@ -112,5 +108,3 @@ ShipmentSchema.index({ userId: 1, createdAt: -1 });
 ShipmentSchema.index({ status: 1, createdAt: 1 });
 ShipmentSchema.index({ trackingNumber: 1 }, { sparse: true });
 ShipmentSchema.index({ orderNumber: 1 });
-// A guest's own shipments, found by the token their checkout cookie carries.
-ShipmentSchema.index({ guestToken: 1, createdAt: -1 }, { name: 'guest_shipments' });

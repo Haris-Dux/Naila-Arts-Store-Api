@@ -163,22 +163,31 @@ Administrators are peers: one can manage another, which is what lets a departed
 admin be deactivated. `assertNotLastAdmin` prevents that becoming a lockout.
 
 **An order can belong to a guest.** `Order.userId` is nullable; a guest order
-carries `guestToken`, matching the signed guest cookie, and its own
-`contactEmail`/`contactName`. Resolve the caller with `readRequestOwner(request)`
-and check ownership with `ownsRecord(owner, record)` — one predicate for orders,
-payments and shipments, so the rule cannot drift between them.
+carries only its own `contactEmail`/`contactName`. Check ownership with
+`ownsRecord(actor.id, record)` from `common/ownership.ts` — one predicate for
+orders, payments and shipments, so the rule cannot drift between them — paired
+with the service's own `roleAtLeast(actor.role, ADMIN)` for staff.
 
-**A guest's identity is minted at checkout**, not before — that is the first
-moment they own anything on the server. The signed `guest_token` cookie then
-carries them through order, payment and shipment. Their idempotency key is scoped
-by the request body rather than the cookie, because the cookie does not exist yet
-on the first attempt and a retry carrying it would otherwise land in a different
-scope and place a second order.
+**A guest is never identified.** Nothing is minted for them: no cookie, no
+token, no server-side session. Their handle on the order is its **order number**,
+and `GET /orders/lookup?orderNumber=…` is the whole of their access — a public,
+rate-limited, read-only tracking view. Their idempotency key is scoped by the
+request body, since there is no identity to scope it by.
 
-Customer-facing order, payment and shipment routes are `@Public()` but **not
-unauthenticated**: the guard still populates `req.user`, and an unidentified
-caller owns nothing. Listing returns an empty page; fetching returns 404, never
-somebody else's record.
+That lookup returns a **reduced** view (`OrderTrackingDto`): status, items,
+totals, payment status and parcel tracking, with the recipient shortened to
+`Jane D.` and the destination to city and country. No email, phone, street
+address or customer note. An order number is printed on parcels and quoted in
+emails, so it identifies an order without proving who is asking — which is also
+why nothing in that path can *change* an order. A guest order is cancelled by
+staff.
+
+Customer-facing order, payment and shipment routes therefore **require a token**.
+The two exceptions are checkout and `POST /payments`: a guest confirming how they
+will pay holds nothing but the order id checkout just returned, so a guest order
+(`userId: null`) is accepted on that id alone. An order that belongs to an
+account still needs that account's token, and every read returns 404 rather than
+403 for somebody else's record.
 
 **Editable storefront regions are declared, not built.** A region — the
 announcement bar, the homepage banner slider — is a `defineSection(...)` in
@@ -329,14 +338,16 @@ surface as an unhandled promise instead of a retry.
 
 ## Payment methods
 
-`BANK_TRANSFER` is prepaid: the payment stays `PENDING` and nothing ships until an
-administrator captures it.
+`CASH_ON_DELIVERY` is the only method the shop settles, and how it works is
+load-bearing. The courier collects at the door, so fulfilment cannot wait for a
+capture — the payment opens as `AUTHORIZED` and emits `order.confirmed`, which
+shipping subscribes to alongside `order.paid`. The capture is recorded
+afterwards, when the cash is handed in.
 
-`CASH_ON_DELIVERY` is the opposite, and the difference is load-bearing. The
-courier collects at the door, so fulfilment cannot wait for a capture — the
-payment opens as `AUTHORIZED` and emits `order.confirmed`, which shipping
-subscribes to alongside `order.paid`. The capture is recorded afterwards, when
-the cash is handed in.
+`CARD` is declared for the gateway that will come later; no provider supports it,
+so it is a 400 today. Adding one means writing a class against
+`PaymentProvider` and registering it — the webhook route, signature verification
+and replay handling are already built and exercised by the manual provider.
 
 That means **a COD order never reaches `PAID`**, and that is deliberate: by
 capture time it is already `DELIVERED`, and moving it to `PAID` would be a

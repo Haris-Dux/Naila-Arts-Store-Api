@@ -1,23 +1,8 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Headers,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-  Res,
-} from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { ConfigService } from '@nestjs/config';
-import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import { ValidationFailedException } from '../../common/exceptions/domain.exception';
-import { newGuestToken, setGuestCookie } from '../../common/guest-token';
-import { RequestOwner, readRequestOwner } from '../../common/request-owner';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { MinRole } from '../auth/decorators/roles.decorator';
@@ -26,50 +11,44 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { CheckoutService } from './checkout.service';
 import { CancelOrderDto, CheckoutDto, UpdateOrderStatusDto } from './dto/checkout.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
+import { LookupOrderDto, OrderTrackingDto } from './dto/order-tracking.dto';
 import { OrderResponseDto } from './dto/order-response.dto';
 import { IdempotencyService } from './idempotency.service';
+import { OrderTrackingService } from './order-tracking.service';
 import { OrdersService } from './orders.service';
 
 /**
- * Customer-facing order routes are @Public() but not unauthenticated.
+ * Checkout and the tracking lookup are `@Public()`; everything else needs a
+ * token.
  *
- * JwtAuthGuard still runs and populates `req.user` when a token is present; the
- * owner is then resolved from that in preference to the guest cookie. So a
- * signed-in customer always acts on their own orders, and a guest acts on the
- * ones placed with their cookie. Neither can reach anybody else's.
- *
- * Staff routes keep their `@MinRole(ADMIN)` guard.
+ * A guest owns no identity on the server — there is no cookie and nothing is
+ * minted for them — so the only way back to a guest order is `GET
+ * /orders/lookup`, which matches on the order number and returns a reduced view.
+ * Every other customer route resolves the caller from their token and reaches
+ * only their own orders; staff routes keep `@MinRole(ADMIN)`.
  */
 @ApiTags('orders')
 @Controller('orders')
 export class OrdersController {
-  private readonly isProduction: boolean;
-
   constructor(
     private readonly ordersService: OrdersService,
     private readonly checkoutService: CheckoutService,
     private readonly idempotencyService: IdempotencyService,
-    config: ConfigService,
-  ) {
-    this.isProduction = config.getOrThrow<string>('app.env') === 'production';
-  }
+    private readonly trackingService: OrderTrackingService,
+  ) {}
 
   /**
    * Scope for the idempotency key.
    *
    * Keys are per-caller so two customers cannot collide on a shared value like
-   * "checkout-1". A signed-in customer has a stable id to scope by.
-   *
-   * A guest does not, and deliberately is not scoped by their cookie: checkout
-   * is where that cookie gets minted, so a guest's first attempt has no identity
-   * and their retry — carrying the cookie the first response set — would land in
-   * a different scope and place a second order. The request body stands in
-   * instead. It is stable across a retry by definition, since reusing a key with
-   * a different body is refused anyway, and it separates two guests reliably:
-   * matching would mean the same email, name, address and basket.
+   * "checkout-1". A signed-in customer has a stable id to scope by; a guest has
+   * nothing at all, so the request body stands in. It is stable across a retry
+   * by definition, since reusing a key with a different body is refused anyway,
+   * and it separates two guests reliably: matching would mean the same email,
+   * name, address and basket.
    */
-  private static ownerScope(owner: RequestOwner, dto: CheckoutDto): string {
-    return owner.userId ?? `guest:${IdempotencyService.fingerprint(dto)}`;
+  private static ownerScope(actor: AuthenticatedUser | undefined, dto: CheckoutDto): string {
+    return actor?.id ?? `guest:${IdempotencyService.fingerprint(dto)}`;
   }
 
   /**
@@ -100,8 +79,7 @@ export class OrdersController {
   @ApiResponse({ status: 409, description: 'Insufficient stock, or a request already in flight' })
   async checkout(
     @Body() dto: CheckoutDto,
-    @Req() request: Request,
-    @Res({ passthrough: true }) response: Response,
+    @CurrentUser() actor?: AuthenticatedUser,
     @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<OrderResponseDto> {
     if (!idempotencyKey || idempotencyKey.trim().length < 8) {
@@ -110,31 +88,20 @@ export class OrdersController {
       );
     }
 
-    const caller = readRequestOwner(request);
-
-    // A guest's first contact with the server is this request, so there is
-    // usually no cookie yet. Mint the identity here: the order needs an owner,
-    // and without one the guest could never read back what they just placed.
-    const mintedToken = caller.userId || caller.guestToken ? null : newGuestToken();
-    const owner: RequestOwner = mintedToken ? { userId: null, guestToken: mintedToken } : caller;
-
     const claim = await this.idempotencyService.claim(
       idempotencyKey.trim(),
-      OrdersController.ownerScope(caller, dto),
+      OrdersController.ownerScope(actor, dto),
       'POST /orders/checkout',
       dto,
-      owner.userId,
+      actor?.id ?? null,
     );
 
-    // Already done: return the original result rather than placing a second
-    // order. Deliberately without setting a cookie — the response that created
-    // the order already sent the token this replay's would contradict.
+    // Already done: return the original result rather than placing a second order.
     if (claim.replay) return claim.replay as unknown as OrderResponseDto;
 
     const token = claim.token as Types.ObjectId;
     try {
-      const order = await this.checkoutService.checkout(owner, dto);
-      if (mintedToken) setGuestCookie(response, mintedToken, this.isProduction);
+      const order = await this.checkoutService.checkout(actor, dto);
       await this.idempotencyService.complete(
         token,
         order as unknown as Record<string, unknown>,
@@ -149,29 +116,42 @@ export class OrdersController {
     }
   }
 
-  @Get()
+  /**
+   * Track an order by its number, with no account and no cookie.
+   *
+   * Declared before `:id`, or the router would read "lookup" as an order id.
+   *
+   * The response is deliberately reduced — no email, phone, street address or
+   * customer note — because an order number travels on parcels, receipts and
+   * forwarded emails, and is therefore not a secret. Throttled like the
+   * credential routes so the number space cannot be swept.
+   */
+  @Get('lookup')
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Track an order by its order number (no account needed)' })
+  @ApiResponse({ status: 200, type: OrderTrackingDto })
+  @ApiResponse({ status: 404, description: 'No order with that number' })
+  lookup(@Query() query: LookupOrderDto): Promise<OrderTrackingDto> {
+    return this.trackingService.lookup(query.orderNumber);
+  }
+
+  @Get()
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'List orders — your own, or all for staff' })
   @ApiResponse({ status: 200, description: 'Paginated orders' })
-  list(
-    @Query() query: ListOrdersDto,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
-    return this.ordersService.list(query, readRequestOwner(request), actor);
+  @ApiResponse({ status: 401, description: 'Requires a token; guests use /orders/lookup' })
+  list(@Query() query: ListOrdersDto, @CurrentUser() actor: AuthenticatedUser) {
+    return this.ordersService.list(query, actor);
   }
 
   @Get(':id')
-  @Public()
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get an order' })
   @ApiResponse({ status: 200, type: OrderResponseDto })
   @ApiResponse({ status: 404, description: 'Not found, or not yours' })
-  findOne(
-    @Param('id') id: string,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
-    return this.ordersService.findById(id, readRequestOwner(request), actor);
+  findOne(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.ordersService.findById(id, actor);
   }
 
   @Patch(':id/status')
@@ -193,18 +173,21 @@ export class OrdersController {
    * Cancel. Replaces the old `DELETE /orders/:id`: an order is a financial
    * record, so it is cancelled, never deleted — and cancelling returns the stock
    * to the shelf, which deletion never did.
+   *
+   * Signed-in customers cancel their own before it ships; staff cancel any.
+   * A guest has no identity to prove, so cancelling a guest order is staff work,
+   * reached through support.
    */
   @Post(':id/cancel')
-  @Public()
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Cancel an order and return its stock' })
   @ApiResponse({ status: 201, type: OrderResponseDto })
   @ApiResponse({ status: 403, description: 'Too late to cancel; contact support' })
   cancel(
     @Param('id') id: string,
     @Body() dto: CancelOrderDto,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.ordersService.cancel(id, readRequestOwner(request), actor, dto.reason);
+    return this.ordersService.cancel(id, actor, dto.reason);
   }
 }

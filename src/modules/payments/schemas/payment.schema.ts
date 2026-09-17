@@ -32,10 +32,6 @@ export class Payment extends BaseSchemaClass {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null, index: true })
   userId!: Types.ObjectId | null;
 
-  /** Mirrors the order's guest token, so a guest can reach their own payment. */
-  @Prop({ type: String, default: null })
-  guestToken!: string | null;
-
   /** Which adapter owns this payment — 'manual' today, a gateway later. */
   @Prop({ required: true })
   provider!: string;
@@ -91,5 +87,3 @@ PaymentSchema.index({ provider: 1, reference: 1 }, { unique: true });
 PaymentSchema.index({ orderId: 1, createdAt: -1 });
 PaymentSchema.index({ userId: 1, createdAt: -1 });
 PaymentSchema.index({ status: 1, createdAt: -1 });
-// A guest's own payments, found by the token their checkout cookie carries.
-PaymentSchema.index({ guestToken: 1, createdAt: -1 }, { name: 'guest_payments' });

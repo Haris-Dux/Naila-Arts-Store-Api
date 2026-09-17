@@ -9,7 +9,7 @@ import {
 } from '../../common/exceptions/domain.exception';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
-import { RequestOwner, ownsRecord } from '../../common/request-owner';
+import { ownsRecord } from '../../common/ownership';
 import { InventoryService, StockLine } from '../inventory/inventory.service';
 import { OutboxService } from '../outbox/outbox.service';
 import { UserRole, roleAtLeast } from '../users/enums/user-role.enum';
@@ -42,26 +42,19 @@ export class OrdersService {
    *
    * A customer sees only their own — the filter is built from the token, so the
    * `userId` query parameter cannot widen it. Staff may filter by customer.
+   *
+   * There is no listing for guests: a guest order belongs to no account, and the
+   * order number is the only handle on it. `OrderTrackingService` looks one up
+   * at a time, which is all a receipt or a parcel label can identify.
    */
-  async list(
-    query: ListOrdersDto,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-  ): Promise<Page<OrderResponseDto>> {
-    const staff = actor ? roleAtLeast(actor.role, UserRole.ADMIN) : false;
+  async list(query: ListOrdersDto, actor: AuthenticatedUser): Promise<Page<OrderResponseDto>> {
+    const staff = roleAtLeast(actor.role, UserRole.ADMIN);
 
     const filter: FilterQuery<OrderDocument> = { ...notDeleted };
     if (staff) {
       if (query.userId) filter.userId = new Types.ObjectId(query.userId);
-    } else if (owner.userId) {
-      filter.userId = new Types.ObjectId(owner.userId);
-    } else if (owner.guestToken) {
-      // A guest sees the orders placed with this browser's cookie, and nothing else.
-      filter.guestToken = owner.guestToken;
     } else {
-      // Neither signed in nor carrying a cookie: nothing to show, and no filter
-      // would mean showing everything.
-      return Page.of([], 0, query.page, query.limit);
+      filter.userId = new Types.ObjectId(actor.id);
     }
     if (query.status) filter.status = query.status;
 
@@ -78,13 +71,9 @@ export class OrdersService {
     return Page.of(documents.map(OrderResponseDto.from), total, query.page, query.limit);
   }
 
-  async findById(
-    id: string,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-  ): Promise<OrderResponseDto> {
+  async findById(id: string, actor: AuthenticatedUser): Promise<OrderResponseDto> {
     const order = await this.getDocumentOrThrow(id);
-    this.assertMayView(owner, order, actor);
+    this.assertMayView(order, actor);
     return OrderResponseDto.from(order);
   }
 
@@ -181,22 +170,22 @@ export class OrdersService {
    * A customer may cancel their own before it ships; staff may cancel at any
    * point the state machine allows. Either way the stock goes back on the shelf
    * in the same transaction.
+   *
+   * A guest order has no owner to authenticate, so only staff can cancel one —
+   * which is why the route requires a token rather than accepting an order
+   * number. Cancelling on nothing but a number would let anyone who saw a parcel
+   * label empty somebody else's order.
    */
-  async cancel(
-    id: string,
-    owner: RequestOwner,
-    actor?: AuthenticatedUser,
-    reason?: string,
-  ): Promise<OrderResponseDto> {
+  async cancel(id: string, actor: AuthenticatedUser, reason?: string): Promise<OrderResponseDto> {
     const order = await this.getDocumentOrThrow(id);
-    this.assertMayView(owner, order, actor);
+    this.assertMayView(order, actor);
 
     // A terminal order is a state conflict, not a permissions problem — telling
     // someone they "may not cancel" an order they already cancelled is both
     // wrong and confusing. Fall through to the state machine, which reports 409.
     if (
       !isTerminal(order.status) &&
-      !(actor && roleAtLeast(actor.role, UserRole.ADMIN)) &&
+      !roleAtLeast(actor.role, UserRole.ADMIN) &&
       !CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)
     ) {
       throw new AuthorizationException(
@@ -204,7 +193,7 @@ export class OrdersService {
       );
     }
 
-    return this.updateStatus(id, OrderStatus.CANCELLED, actor ?? null, reason ?? 'Cancelled');
+    return this.updateStatus(id, OrderStatus.CANCELLED, actor, reason ?? 'Cancelled');
   }
 
   // -------------------------------------------------------------- internals
@@ -222,13 +211,9 @@ export class OrdersService {
    * 404 rather than 403 for somebody else's order, so order ids cannot be probed
    * for existence.
    */
-  private assertMayView(
-    owner: RequestOwner,
-    order: OrderDocument,
-    actor?: AuthenticatedUser,
-  ): void {
-    if (actor && roleAtLeast(actor.role, UserRole.ADMIN)) return;
-    if (ownsRecord(owner, order)) return;
+  private assertMayView(order: OrderDocument, actor: AuthenticatedUser): void {
+    if (roleAtLeast(actor.role, UserRole.ADMIN)) return;
+    if (ownsRecord(actor.id, order)) return;
     throw new ResourceNotFoundException('Order', order._id.toString());
   }
 

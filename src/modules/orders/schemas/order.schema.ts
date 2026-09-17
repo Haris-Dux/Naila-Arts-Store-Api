@@ -116,20 +116,11 @@ export class Order extends BaseSchemaClass {
    *
    * Never read from the request body. The old CreateOrderDto carried `userId`,
    * so any signed-in customer could place an order against somebody else's
-   * account; here it comes from the token, and a guest gets `guestToken`
-   * instead.
+   * account; here it comes from the token. A guest order has none, and is
+   * reached by its order number through the public tracking lookup.
    */
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null, index: true })
   userId!: Types.ObjectId | null;
-
-  /**
-   * Identifies a guest's order, matching the signed cookie minted for them at
-   * checkout. That cookie is how they are later allowed to view the order, track
-   * the shipment and pay — without an account, and without an id that anyone
-   * could guess.
-   */
-  @Prop({ type: String, default: null })
-  guestToken!: string | null;
 
   /**
    * Where confirmations go, and how support identifies the buyer.
@@ -210,8 +201,6 @@ export const OrderSchema = SchemaFactory.createForClass(Order);
 OrderSchema.index({ orderNumber: 1 }, { unique: true });
 // "My orders", newest first.
 OrderSchema.index({ userId: 1, createdAt: -1 });
-// A guest's own order history, looked up by their cookie.
-OrderSchema.index({ guestToken: 1, createdAt: -1 }, { sparse: true });
 OrderSchema.index({ contactEmail: 1, createdAt: -1 });
 // Admin queue: orders in a given state, oldest first.
 OrderSchema.index({ status: 1, createdAt: -1 });

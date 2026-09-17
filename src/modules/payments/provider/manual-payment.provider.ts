@@ -12,7 +12,7 @@ import {
 } from './payment-provider.interface';
 
 /**
- * Offline payments: bank transfer and cash on delivery.
+ * Offline payment: cash on delivery.
  *
  * Real, not a stub — a great many stores settle this way, and it makes the whole
  * order lifecycle exercisable before a gateway has been chosen. Money moves
@@ -26,7 +26,7 @@ import {
 @Injectable()
 export class ManualPaymentProvider implements PaymentProvider {
   readonly name = 'manual';
-  readonly supportedMethods = [PaymentMethod.BANK_TRANSFER, PaymentMethod.CASH_ON_DELIVERY];
+  readonly supportedMethods = [PaymentMethod.CASH_ON_DELIVERY];
 
   private readonly logger = new Logger(ManualPaymentProvider.name);
   private readonly config: PaymentsConfig;
@@ -36,40 +36,24 @@ export class ManualPaymentProvider implements PaymentProvider {
   }
 
   createPayment(input: CreatePaymentInput): Promise<ProviderPaymentResult> {
-    // The reference doubles as the payment reference the customer quotes on
-    // their transfer, so it has to be readable and unambiguous.
+    // The reference is what the courier's paperwork and the shop's own records
+    // are matched on, so it has to be readable and unambiguous.
     const reference = `${input.orderNumber}-${randomBytes(3).toString('hex').toUpperCase()}`;
-
-    const instructions =
-      input.method === PaymentMethod.BANK_TRANSFER
-        ? {
-            method: PaymentMethod.BANK_TRANSFER,
-            bankName: this.config.bankName,
-            accountName: this.config.accountName,
-            accountNumber: this.config.accountNumber,
-            // Without this on the transfer, reconciliation is manual guesswork.
-            paymentReference: reference,
-            note: 'Quote the payment reference exactly; your order ships once the transfer clears.',
-          }
-        : {
-            method: PaymentMethod.CASH_ON_DELIVERY,
-            paymentReference: reference,
-            note: 'Payment is collected by the courier on delivery.',
-          };
 
     return Promise.resolve({
       reference,
       /**
        * Cash on delivery is *authorized*, not pending: the customer has
        * committed to pay and the courier will collect, so the order can be
-       * fulfilled before any money moves. A bank transfer stays pending —
-       * nothing is owed until the funds actually arrive.
+       * fulfilled before any money moves. Capture comes later, when the cash is
+       * handed over.
        */
-      status:
-        input.method === PaymentMethod.CASH_ON_DELIVERY
-          ? PaymentStatus.AUTHORIZED
-          : PaymentStatus.PENDING,
-      instructions,
+      status: PaymentStatus.AUTHORIZED,
+      instructions: {
+        method: PaymentMethod.CASH_ON_DELIVERY,
+        paymentReference: reference,
+        note: 'Payment is collected by the courier on delivery.',
+      },
     });
   }
 

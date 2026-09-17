@@ -13,7 +13,6 @@ import { ApiBearerAuth, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@n
 import { Throttle } from '@nestjs/throttler';
 import { RawBodyRequest } from '@nestjs/common';
 import { Request } from 'express';
-import { readRequestOwner } from '../../common/request-owner';
 import { ValidationFailedException } from '../../common/exceptions/domain.exception';
 import { SkipResponseWrap } from '../../common/decorators/skip-response-wrap.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -65,43 +64,37 @@ export class PaymentsController {
     return this.paymentsService.handleWebhook(provider, request.rawBody, signature);
   }
 
+  /**
+   * Public, because a guest confirming how they will pay has no token — only the
+   * order id checkout just handed them. An order belonging to an account still
+   * requires that account's token.
+   */
   @Post()
   @Public()
   @ApiOperation({ summary: 'Start a payment for an order (guest or signed in)' })
   @ApiResponse({ status: 201, type: PaymentResponseDto })
   @ApiResponse({ status: 409, description: 'The order is not awaiting payment' })
-  create(
-    @Body() dto: CreatePaymentDto,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
+  create(@Body() dto: CreatePaymentDto, @CurrentUser() actor?: AuthenticatedUser) {
     // No amount on the DTO — it is copied from the order.
-    return this.paymentsService.create(dto, readRequestOwner(request), actor);
+    return this.paymentsService.create(dto, actor);
   }
 
   @Get(':id')
-  @Public()
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get a payment' })
   @ApiResponse({ status: 200, type: PaymentResponseDto })
   @ApiResponse({ status: 404, description: 'Not found, or not yours' })
-  findOne(
-    @Param('id') id: string,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
-    return this.paymentsService.findById(id, readRequestOwner(request), actor);
+  findOne(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.paymentsService.findById(id, actor);
   }
 
+  /** Guests read their payment status from `GET /orders/lookup` instead. */
   @Get('orders/:orderId')
-  @Public()
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Payments against an order' })
   @ApiResponse({ status: 200, type: [PaymentResponseDto] })
-  findForOrder(
-    @Param('orderId') orderId: string,
-    @Req() request: Request,
-    @CurrentUser() actor?: AuthenticatedUser,
-  ) {
-    return this.paymentsService.findForOrder(orderId, readRequestOwner(request), actor);
+  findForOrder(@Param('orderId') orderId: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.paymentsService.findForOrder(orderId, actor);
   }
 
   /**

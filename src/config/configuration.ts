@@ -8,8 +8,6 @@ export interface AppConfig {
   corsOrigins: string[];
   /** Public-facing base URL, used in emails and payment redirects. */
   publicUrl: string;
-  /** Signs the guest-identity cookie. Separate from JWT_SECRET on purpose. */
-  cookieSecret: string;
 }
 
 /** Where uploaded bytes live. */
@@ -116,10 +114,6 @@ export interface PaymentsConfig {
   webhookSecret: string;
   /** How far a webhook timestamp may drift before it is rejected as a replay. */
   webhookToleranceSeconds: number;
-  // Shown to the customer for a bank transfer.
-  bankName: string;
-  accountName: string;
-  accountNumber: string;
 }
 
 export interface Configuration {
@@ -144,7 +138,6 @@ export const configuration = (): Configuration => ({
       .map((origin) => origin.trim().replace(/\/+$/, ''))
       .filter(Boolean),
     publicUrl: process.env.PUBLIC_URL as string,
-    cookieSecret: process.env.COOKIE_SECRET as string,
   },
   database: {
     uri: process.env.MONGO_URI as string,
@@ -192,9 +185,6 @@ export const configuration = (): Configuration => ({
   payments: {
     webhookSecret: process.env.PAYMENT_WEBHOOK_SECRET as string,
     webhookToleranceSeconds: parseInt(process.env.PAYMENT_WEBHOOK_TOLERANCE_SECONDS as string, 10),
-    bankName: process.env.PAYMENT_BANK_NAME as string,
-    accountName: process.env.PAYMENT_ACCOUNT_NAME as string,
-    accountNumber: process.env.PAYMENT_ACCOUNT_NUMBER as string,
   },
   seed: {
     adminEmail: process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase() || undefined,

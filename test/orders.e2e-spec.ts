@@ -737,14 +737,14 @@ describe('Orders & Checkout (e2e)', () => {
       expect(filtered.body.data.items).toHaveLength(1);
     });
 
-    it('shows nothing to a caller with neither a token nor a guest cookie', async () => {
+    it('refuses to list anything for a caller with no token', async () => {
       addLine(shopperToken, productId, 1);
       await checkout(shopperToken).expect(201);
 
-      // The route is open so guests can reach their own orders; an unidentified
-      // caller must see an empty list, never everyone's.
-      const res = await request(app.getHttpServer()).get(api('/orders')).expect(200);
-      expect(res.body.data.items).toHaveLength(0);
+      // The listing is built from the token, so there is nothing sensible to
+      // show a caller without one. A guest looks their order up by its number
+      // instead, one at a time.
+      await request(app.getHttpServer()).get(api('/orders')).expect(401);
     });
 
     it('rejects an unlisted sort field', async () => {

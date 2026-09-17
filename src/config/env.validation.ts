@@ -27,11 +27,6 @@ export const envValidationSchema = Joi.object({
         'scheme and host only, no paths and no "*"',
     }),
   PUBLIC_URL: Joi.string().uri().default('http://localhost:4000'),
-  // Distinct from JWT_SECRET: one secret, one purpose, so rotating the cookie
-  // signing key does not invalidate every access token.
-  COOKIE_SECRET: Joi.string().min(32).required().messages({
-    'string.min': 'COOKIE_SECRET must be at least 32 characters',
-  }),
 
   MONGO_URI: Joi.string().required(),
 
@@ -138,9 +133,6 @@ export const envValidationSchema = Joi.object({
     'string.min': 'PAYMENT_WEBHOOK_SECRET must be at least 32 characters',
   }),
   PAYMENT_WEBHOOK_TOLERANCE_SECONDS: Joi.number().min(30).max(3600).default(300),
-  PAYMENT_BANK_NAME: Joi.string().default('Example Bank'),
-  PAYMENT_ACCOUNT_NAME: Joi.string().default('Example Store Ltd'),
-  PAYMENT_ACCOUNT_NUMBER: Joi.string().default('GB00EXAM00000000000000'),
 
   // The first administrator, created at startup when none exists (see
   // AdminSeedService). Optional here: once an administrator exists they are
