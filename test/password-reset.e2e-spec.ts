@@ -148,7 +148,7 @@ describe('Password reset (e2e)', () => {
       await forgot().expect(202);
 
       expect(codeMails()).toHaveLength(1);
-      await reset(first).expect(204);
+      await reset(first).expect(200);
     });
 
     it('sends at most five codes an hour', async () => {
@@ -189,7 +189,7 @@ describe('Password reset (e2e)', () => {
       const session = await register();
       await forgot().expect(202);
 
-      await reset(latestCode()).expect(204);
+      await reset(latestCode()).expect(200);
 
       await login(password).expect(401);
       await login(newPassword).expect(200);
@@ -209,7 +209,7 @@ describe('Password reset (e2e)', () => {
       await register();
       await forgot().expect(202);
 
-      await reset(latestCode()).expect(204);
+      await reset(latestCode()).expect(200);
 
       const confirmation = mails().filter((mail) => /password was changed/i.test(mail.subject));
       expect(confirmation).toHaveLength(1);
@@ -262,7 +262,7 @@ describe('Password reset (e2e)', () => {
       await forgot().expect(202);
       const code = latestCode();
 
-      await reset(code).expect(204);
+      await reset(code).expect(200);
       await reset(code, 'An0ther-StrongP@ss!').expect(400);
 
       await login(newPassword).expect(200);
@@ -277,7 +277,7 @@ describe('Password reset (e2e)', () => {
         await Promise.all([reset(code, newPassword), reset(code, 'An0ther-StrongP@ss!')])
       ).map((res) => res.status);
 
-      expect(statuses.sort()).toEqual([204, 400]);
+      expect(statuses.sort()).toEqual([200, 400]);
     });
 
     it('stops the previous code working once a new one is sent', async () => {
@@ -291,7 +291,7 @@ describe('Password reset (e2e)', () => {
       // One chance in a million the two codes are equal; the check below would
       // then be meaningless rather than wrong.
       if (first !== second) await reset(first).expect(400);
-      await reset(second).expect(204);
+      await reset(second).expect(200);
     });
 
     it('refuses a weak new password without using up a guess', async () => {
@@ -301,7 +301,7 @@ describe('Password reset (e2e)', () => {
       await reset(latestCode(), 'weak').expect(400);
 
       expect((await codeModel.findOne({}).lean().exec())?.attempts).toBe(0);
-      await reset(latestCode()).expect(204);
+      await reset(latestCode()).expect(200);
     });
 
     it('refuses a malformed code before looking anything up', async () => {

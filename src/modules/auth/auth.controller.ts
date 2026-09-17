@@ -72,11 +72,13 @@ export class AuthController {
   }
 
   @Post('logout')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'End the current session' })
-  async logout(@Body() dto: RefreshDto): Promise<void> {
+  @ApiResponse({ status: 200, description: 'Signed out' })
+  async logout(@Body() dto: RefreshDto): Promise<{ message: string }> {
     await this.authService.logout(dto.refreshToken);
+    return { message: 'Signed out.' };
   }
 
   @Post('logout-all')
@@ -88,16 +90,18 @@ export class AuthController {
   }
 
   @Post('change-password')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @Throttle(CREDENTIAL_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Change password; revokes all existing sessions' })
+  @ApiResponse({ status: 200, description: 'Password changed' })
   @ApiResponse({ status: 401, description: 'Current password is incorrect' })
   async changePassword(
     @CurrentUser('id') userId: string,
     @Body() dto: ChangePasswordDto,
-  ): Promise<void> {
+  ): Promise<{ message: string }> {
     await this.authService.changePassword(userId, dto);
+    return { message: 'Password changed. Please sign in again on your other devices.' };
   }
 
   @Post('forgot-password')
@@ -117,13 +121,14 @@ export class AuthController {
 
   @Post('reset-password')
   @Public()
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @Throttle(CREDENTIAL_THROTTLE)
   @ApiOperation({ summary: 'Set a new password with the emailed code; signs out every session' })
-  @ApiResponse({ status: 204, description: 'Password changed' })
+  @ApiResponse({ status: 200, description: 'Password changed' })
   @ApiResponse({ status: 400, description: 'INVALID_RESET_CODE — invalid or expired code' })
-  async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ message: string }> {
     await this.passwordReset.reset(dto.email, dto.code, dto.newPassword);
+    return { message: 'Password reset. You can now sign in with your new password.' };
   }
 
   @Get('me')

@@ -277,7 +277,7 @@ describe('Catalog & Inventory (e2e)', () => {
       await request(app.getHttpServer())
         .delete(api(`/products/${id}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(204);
+        .expect(200);
 
       const list = await request(app.getHttpServer()).get(api('/products')).expect(200);
       expect(list.body.data.items).toHaveLength(0);
@@ -428,7 +428,7 @@ describe('Catalog & Inventory (e2e)', () => {
       await request(app.getHttpServer())
         .delete(api(`/products/${id}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(204);
+        .expect(200);
 
       const stored = await productModel.findById(id).exec();
       expect(stored?.deletedAt).not.toBeNull();
@@ -532,7 +532,7 @@ describe('Catalog & Inventory (e2e)', () => {
         await request(app.getHttpServer())
           .delete(api(`/products/${ids[ids.length - 1]}`))
           .set('Authorization', `Bearer ${adminToken}`)
-          .expect(204);
+          .expect(200);
       });
 
       const survivors = ids.slice(0, -1);

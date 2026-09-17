@@ -403,7 +403,7 @@ describe('Category tree (e2e)', () => {
       await request(app.getHttpServer())
         .delete(api(`/categories/${id}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(204);
+        .expect(200);
 
       expect(names((await tree().expect(200)).body)).not.toContain('Lawn');
     });

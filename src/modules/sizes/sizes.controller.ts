@@ -62,11 +62,13 @@ export class SizesController {
 
   @Delete(':id')
   @MinRole(UserRole.ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Soft-delete a size no product offers' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
   @ApiResponse({ status: 409, description: 'Size still offered by products' })
-  async remove(@Param('id') id: string): Promise<void> {
+  async remove(@Param('id') id: string): Promise<{ message: string }> {
     await this.sizesService.remove(id);
+    return { message: 'Size deleted.' };
   }
 }

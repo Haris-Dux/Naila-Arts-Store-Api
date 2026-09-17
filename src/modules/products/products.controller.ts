@@ -91,12 +91,13 @@ export class ProductsController {
 
   @Delete(':id')
   @MinRole(UserRole.ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Soft-delete a product' })
-  @ApiResponse({ status: 204, description: 'Deleted' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
   @ApiResponse({ status: 404, description: 'Product not found' })
-  async remove(@Param('id') id: string): Promise<void> {
+  async remove(@Param('id') id: string): Promise<{ message: string }> {
     await this.productsService.remove(id);
+    return { message: 'Product deleted.' };
   }
 }

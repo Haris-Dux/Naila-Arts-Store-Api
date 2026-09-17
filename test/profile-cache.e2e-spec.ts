@@ -152,7 +152,7 @@ describe('Profile cache (e2e)', () => {
     await http()
       .delete(api(`/users/${customer.id}`))
       .set('Authorization', `Bearer ${admin.token}`)
-      .expect(204);
+      .expect(200);
 
     await http()
       .get(api(`/users/${customer.id}`))

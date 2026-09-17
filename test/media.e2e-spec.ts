@@ -320,7 +320,7 @@ describe('Media (e2e)', () => {
       await request(app.getHttpServer())
         .delete(api(`/media/${a}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(204);
+        .expect(200);
 
       await expect(readFile(path)).rejects.toThrow();
       await request(app.getHttpServer())
@@ -338,7 +338,7 @@ describe('Media (e2e)', () => {
       await request(app.getHttpServer())
         .delete(api(`/media/${first.body.data[0].id as string}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(204);
+        .expect(200);
 
       const again = await uploadRaw([{ bytes, name: 'x.webp' }]).expect(201);
       expect(again.body.data[0].id).not.toBe(first.body.data[0].id);

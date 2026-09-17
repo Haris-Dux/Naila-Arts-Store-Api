@@ -95,11 +95,13 @@ export class MediaController {
 
   @Delete(':id')
   @MinRole(UserRole.ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete an image no product uses' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
   @ApiResponse({ status: 409, description: 'Still referenced by a product' })
-  async remove(@Param('id') id: string): Promise<void> {
+  async remove(@Param('id') id: string): Promise<{ message: string }> {
     await this.mediaService.remove(id);
+    return { message: 'Image deleted.' };
   }
 }

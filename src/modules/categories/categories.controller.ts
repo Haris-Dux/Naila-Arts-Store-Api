@@ -103,12 +103,14 @@ export class CategoriesController {
 
   @Delete(':id')
   @MinRole(UserRole.ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Soft-delete an empty category' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
   @ApiResponse({ status: 409, description: 'Category still has products or subcategories' })
-  async remove(@Param('id') id: string): Promise<void> {
+  async remove(@Param('id') id: string): Promise<{ message: string }> {
     await this.categoriesService.remove(id);
+    return { message: 'Category deleted.' };
   }
 
   /**

@@ -101,12 +101,16 @@ export class UsersController {
 
   @Delete(':id')
   @MinRole(UserRole.ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Soft-delete a user' })
-  @ApiResponse({ status: 204, description: 'Deleted' })
+  @ApiResponse({ status: 200, description: 'Deleted' })
   @ApiResponse({ status: 400, description: 'Would remove the last administrator' })
-  async remove(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser): Promise<void> {
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<{ message: string }> {
     await this.usersService.remove(id, actor);
     await this.authService.propagateRevocation(id);
+    return { message: 'User deleted.' };
   }
 }

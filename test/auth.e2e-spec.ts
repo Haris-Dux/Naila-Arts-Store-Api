@@ -213,7 +213,7 @@ describe('Auth & Users (e2e)', () => {
         .post(api('/auth/change-password'))
         .set('Authorization', `Bearer ${accessToken}`)
         .send({ currentPassword: strongPassword, newPassword })
-        .expect(204);
+        .expect(200);
 
       const stored = await userModel.findById(userId).select('+password').exec();
       expect(stored?.password).not.toBe(newPassword);
@@ -438,11 +438,13 @@ describe('Auth & Users (e2e)', () => {
     it('revokes a single session on logout', async () => {
       const { accessToken, refreshToken } = await registerAndLogin();
 
-      await request(app.getHttpServer())
+      const loggedOut = await request(app.getHttpServer())
         .post(api('/auth/logout'))
         .set('Authorization', `Bearer ${accessToken}`)
         .send({ refreshToken })
-        .expect(204);
+        .expect(200);
+      // A body the client can show, not an empty 204.
+      expect(loggedOut.body.data).toEqual({ message: 'Signed out.' });
 
       await request(app.getHttpServer())
         .post(api('/auth/refresh'))

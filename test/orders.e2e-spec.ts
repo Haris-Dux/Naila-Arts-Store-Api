@@ -788,7 +788,7 @@ describe('Orders & Checkout (e2e)', () => {
       await request(app.getHttpServer())
         .delete(api(`/products/${productId}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(204);
+        .expect(200);
 
       const res = await request(app.getHttpServer())
         .get(api(`/orders/${order.body.data.id}`))

@@ -172,11 +172,12 @@ describe('Sizes, promotions and units sold (e2e)', () => {
         .expect(409);
       expect(refused.body.message).toMatch(/1 product/);
 
-      // Unused ones delete fine.
-      await request(app.getHttpServer())
+      // Unused ones delete fine, and say so.
+      const deleted = await request(app.getHttpServer())
         .delete(api(`/sizes/${large}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(204);
+        .expect(200);
+      expect(deleted.body.data).toEqual({ message: 'Size deleted.' });
     });
 
     it('hides inactive sizes from shoppers but shows them to staff', async () => {
