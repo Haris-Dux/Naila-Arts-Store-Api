@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import { ProductSizing } from '../enums/product-sizing.enum';
+import { ALL_VIDEO_HOSTS, VideoPlatform } from '../enums/video-platform.enum';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -22,16 +23,7 @@ const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : (value as string);
 
 /** A product carries at most this many photographs. */
-export const MAX_PRODUCT_IMAGES = 5;
-
-/** Where a product's video may live: the brand's Facebook page. */
-const FACEBOOK_HOSTS = [
-  'facebook.com',
-  'www.facebook.com',
-  'm.facebook.com',
-  'web.facebook.com',
-  'fb.watch',
-];
+export const MAX_PRODUCT_IMAGES = 8;
 
 export class ProductImageDto {
   /**
@@ -87,21 +79,32 @@ export class CreateProductDto {
   @Transform(trim)
   description?: string;
 
-  /** A video on the brand's Facebook page, or null to remove it. */
+  /**
+   * A video of the product on the brand's Facebook page or YouTube channel, or
+   * null to remove it. Sent together with `videoPlatform`: the pair is checked
+   * in the service, which is where a link can be matched against the platform
+   * it claims — this only rules out anything that is on neither.
+   */
   @ApiPropertyOptional({
-    description: 'An https link to a Facebook video; null removes it',
-    example: 'https://www.facebook.com/watch/?v=1234567890',
+    description: 'An https link to a Facebook or YouTube video; null removes the video',
+    example: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     nullable: true,
   })
   @IsOptional()
   @IsString()
   @MaxLength(500)
   @IsUrl(
-    { protocols: ['https'], require_protocol: true, host_whitelist: FACEBOOK_HOSTS },
-    { message: 'facebookVideoUrl must be an https link to a Facebook video' },
+    { protocols: ['https'], require_protocol: true, host_whitelist: [...ALL_VIDEO_HOSTS] },
+    { message: 'videoUrl must be an https link to a Facebook or YouTube video' },
   )
   @Transform(trim)
-  facebookVideoUrl?: string | null;
+  videoUrl?: string | null;
+
+  /** Which site `videoUrl` is on. Required whenever `videoUrl` is set. */
+  @ApiPropertyOptional({ enum: VideoPlatform, nullable: true })
+  @IsOptional()
+  @IsEnum(VideoPlatform, { message: 'videoPlatform must be FACEBOOK or YOUTUBE' })
+  videoPlatform?: VideoPlatform | null;
 
   /**
    * The ERP suit this product is built on — a `suits._id`.

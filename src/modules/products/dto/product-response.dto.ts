@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Money } from '../../../common/money';
 import { ProductSizing } from '../enums/product-sizing.enum';
+import { VideoPlatform } from '../enums/video-platform.enum';
 import { ProductDocument } from '../schemas/product.schema';
 
 export class MoneyDto {
@@ -53,7 +54,10 @@ export class ProductResponseDto {
   @ApiProperty() sellCount!: number;
   @ApiProperty() isActive!: boolean;
   @ApiPropertyOptional({ type: String, nullable: true }) sku!: string | null;
-  @ApiPropertyOptional({ type: String, nullable: true }) facebookVideoUrl!: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) videoUrl!: string | null;
+  /** Which player to embed `videoUrl` in. Null exactly when `videoUrl` is. */
+  @ApiPropertyOptional({ enum: VideoPlatform, nullable: true })
+  videoPlatform!: VideoPlatform | null;
   /** The ERP suit this product is built on; its stock lives there. */
   @ApiPropertyOptional({ type: String, nullable: true }) erpId!: string | null;
   @ApiProperty() createdAt!: Date;
@@ -109,7 +113,8 @@ export class ProductResponseDto {
       sellCount: product.sellCount,
       isActive: product.isActive,
       sku: product.sku,
-      facebookVideoUrl: product.facebookVideoUrl ?? null,
+      videoUrl: product.videoUrl ?? null,
+      videoPlatform: product.videoPlatform ?? null,
       erpId: product.erpId ?? null,
       createdAt: product.createdAt,
       updatedAt: product.updatedAt,

@@ -253,15 +253,16 @@ describe('Media (e2e)', () => {
       expect(created.body.data.images[0].url).toMatch(/^\/media\//);
     });
 
-    it('caps a product at five images', async () => {
-      const ids = await upload(5);
+    it('caps a product at eight images', async () => {
+      // Eight fit in a single upload request, which takes up to ten files.
+      const ids = await upload(8);
       await makeProduct({ images: ids.map((mediaId) => ({ mediaId })) }).expect(201);
 
       const rejected = await makeProduct({
         name: 'Too many',
         images: [...ids, ...(await upload(1))].map((mediaId) => ({ mediaId })),
       }).expect(400);
-      expect(JSON.stringify(rejected.body)).toMatch(/at most 5 images/i);
+      expect(JSON.stringify(rejected.body)).toMatch(/at most 8 images/i);
     });
 
     it('refuses an image that does not exist', async () => {

@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 import { BaseSchemaClass } from '../../../common/schemas/base.schema';
 import { ProductSizing } from '../enums/product-sizing.enum';
+import { VideoPlatform } from '../enums/video-platform.enum';
 
 export type ProductDocument = HydratedDocument<Product>;
 
@@ -65,9 +66,17 @@ export class Product extends BaseSchemaClass {
   @Prop({ type: String, default: null })
   descriptionText!: string | null;
 
-  /** A video on the brand's Facebook page. */
+  /** A video of the product on the brand's Facebook page or YouTube channel. */
   @Prop({ type: String, default: null })
-  facebookVideoUrl!: string | null;
+  videoUrl!: string | null;
+
+  /**
+   * Which site `videoUrl` is on, so the storefront can embed the right player.
+   * Set and cleared together with the URL — ProductsService never stores one
+   * without the other.
+   */
+  @Prop({ type: String, enum: Object.values(VideoPlatform), default: null })
+  videoPlatform!: VideoPlatform | null;
 
   /**
    * Integer minor units (cents). Never a float, never a decimal string.

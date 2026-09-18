@@ -513,7 +513,7 @@
                 "{{productSlug}}"
               ]
             },
-            "description": "The same product, looked up by the `slug` in its page URL — what a product page loads.\n\n**Auth:** none.\n**Notable fields:**\n- `description` is rich text (HTML, already sanitised by the server) — render it as HTML.\n- `facebookVideoUrl` links the product's video on the shop's Facebook page, when set.\n- `sizes` lists the sizes to choose from when `sizing` is `SIZED`; `inStock` and `stock` say whether it can be bought."
+            "description": "The same product, looked up by the `slug` in its page URL — what a product page loads.\n\n**Auth:** none.\n**Notable fields:**\n- `description` is rich text (HTML, already sanitised by the server) — render it as HTML.\n- `videoUrl` links a video of the product, and `videoPlatform` says where it is — `FACEBOOK` or `YOUTUBE` — so you can embed the right player. Both are null when the product has no video.\n- `sizes` lists the sizes to choose from when `sizing` is `SIZED`; `inStock` and `stock` say whether it can be bought."
           },
           "event": [
             {

@@ -20,9 +20,18 @@ import { ListProductsDto } from './dto/list-products.dto';
 import { ProductResponseDto, ProductSizeResponseDto } from './dto/product-response.dto';
 import { CreateProductDto, ProductImageDto, UpdateProductDto } from './dto/product.dto';
 import { ProductSizing } from './enums/product-sizing.enum';
+import { VideoPlatform, isVideoOnPlatform } from './enums/video-platform.enum';
 import { Product, ProductDocument, ProductImage } from './schemas/product.schema';
 import { Suit, SuitDocument } from '../erp/schemas/suit.schema';
 import { toDescription } from './rich-text';
+
+/** A product's video, as stored: both set, or both null. */
+interface VideoFields {
+  videoUrl: string | null;
+  videoPlatform: VideoPlatform | null;
+}
+
+const NO_VIDEO: VideoFields = { videoUrl: null, videoPlatform: null };
 
 @Injectable()
 export class ProductsService {
@@ -189,6 +198,7 @@ export class ProductsService {
     // can never point at a file that is not there.
     await this.media.assertAllExist((dto.images ?? []).map((image) => image.mediaId));
     const sizing = await this.resolveSizing(dto.sizes ?? [], dto.sizing);
+    const video = ProductsService.resolveVideo(dto.videoUrl, dto.videoPlatform) ?? NO_VIDEO;
     const suit = dto.erpId ? await this.resolveSuit(dto.erpId) : null;
     const description = toDescription(dto.description);
 
@@ -197,7 +207,8 @@ export class ProductsService {
       slug,
       description: description.html,
       descriptionText: description.text,
-      facebookVideoUrl: dto.facebookVideoUrl ?? null,
+      videoUrl: video.videoUrl,
+      videoPlatform: video.videoPlatform,
       price: dto.price,
       promotionalPrice,
       effectivePrice: promotionalPrice ?? dto.price,
@@ -238,7 +249,11 @@ export class ProductsService {
       product.description = description.html;
       product.descriptionText = description.text;
     }
-    if (dto.facebookVideoUrl !== undefined) product.facebookVideoUrl = dto.facebookVideoUrl ?? null;
+    const video = ProductsService.resolveVideo(dto.videoUrl, dto.videoPlatform);
+    if (video) {
+      product.videoUrl = video.videoUrl;
+      product.videoPlatform = video.videoPlatform;
+    }
     if (dto.isActive !== undefined) product.isActive = dto.isActive;
 
     // Price and promotion are resolved together from the merged state: raising
@@ -353,6 +368,58 @@ export class ProductsService {
       );
     }
     return promotional;
+  }
+
+  /**
+   * Resolve the video URL and its platform together, or `undefined` when the
+   * request touches neither.
+   *
+   * The two are stored as separate fields but only ever mean something as a
+   * pair, so they are validated as one — the same reasoning as `resolveSizing`.
+   * Checked here rather than on the DTO because only here are both values in
+   * hand: the DTO has already ruled out any host that is on neither platform.
+   *
+   *  - a URL needs its platform, and must actually be on it;
+   *  - `videoUrl: null` removes the video, platform and all;
+   *  - a platform on its own changes nothing it could be applied to, so it is
+   *    refused rather than silently ignored.
+   */
+  private static resolveVideo(
+    url: string | null | undefined,
+    platform: VideoPlatform | null | undefined,
+  ): VideoFields | undefined {
+    if (url === undefined && platform === undefined) return undefined;
+
+    if (url === undefined) {
+      throw new ValidationFailedException(
+        'Send videoUrl with videoPlatform; to remove the video, send videoUrl: null',
+      );
+    }
+
+    if (url === null) {
+      if (platform) {
+        throw new ValidationFailedException(
+          'videoPlatform needs a videoUrl; to remove the video, send videoUrl: null alone',
+        );
+      }
+      return NO_VIDEO;
+    }
+
+    if (!platform) {
+      throw new ValidationFailedException(
+        'Choose the platform the video is on: videoPlatform must be FACEBOOK or YOUTUBE',
+        { videoUrl: url },
+      );
+    }
+
+    if (!isVideoOnPlatform(url, platform)) {
+      throw new ValidationFailedException(
+        `That link is not a ${platform === VideoPlatform.YOUTUBE ? 'YouTube' : 'Facebook'} video`,
+        { videoUrl: url, videoPlatform: platform },
+      );
+    }
+
+    return { videoUrl: url, videoPlatform: platform };
   }
 
   /**

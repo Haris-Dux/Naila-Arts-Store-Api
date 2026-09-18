@@ -949,29 +949,115 @@ describe('Catalog & Inventory (e2e)', () => {
     });
   });
 
-  describe('facebook video', () => {
-    const url = 'https://www.facebook.com/watch/?v=1234567890';
+  describe('product video', () => {
+    const facebook = 'https://www.facebook.com/watch/?v=1234567890';
+    const youtube = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 
-    it('accepts a video on Facebook, and removes it with null', async () => {
-      const created = await createProduct({ facebookVideoUrl: url }).expect(201);
-      expect(created.body.data.facebookVideoUrl).toBe(url);
-
-      const cleared = await request(app.getHttpServer())
-        .patch(api(`/products/${created.body.data.id}`))
+    const patch = (id: string, body: Record<string, unknown>) =>
+      request(app.getHttpServer())
+        .patch(api(`/products/${id}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ facebookVideoUrl: null })
-        .expect(200);
-      expect(cleared.body.data.facebookVideoUrl).toBeNull();
+        .send(body);
+
+    it('accepts a Facebook video, and removes it with a null URL', async () => {
+      const created = await createProduct({
+        videoUrl: facebook,
+        videoPlatform: 'FACEBOOK',
+      }).expect(201);
+      expect(created.body.data.videoUrl).toBe(facebook);
+      expect(created.body.data.videoPlatform).toBe('FACEBOOK');
+
+      // The URL alone removes the video: a platform with nothing to play is meaningless.
+      const cleared = await patch(created.body.data.id as string, { videoUrl: null }).expect(200);
+      expect(cleared.body.data.videoUrl).toBeNull();
+      expect(cleared.body.data.videoPlatform).toBeNull();
     });
 
-    it('accepts a fb.watch short link', async () => {
-      await createProduct({ facebookVideoUrl: 'https://fb.watch/abc123XYZ/' }).expect(201);
+    it('accepts YouTube in its long, short-link and Shorts forms', async () => {
+      for (const url of [
+        youtube,
+        'https://youtu.be/dQw4w9WgXcQ',
+        'https://www.youtube.com/shorts/abc123XYZ',
+        'https://m.youtube.com/watch?v=dQw4w9WgXcQ',
+      ]) {
+        const res = await createProduct({ videoUrl: url, videoPlatform: 'YOUTUBE' }).expect(201);
+        expect(res.body.data.videoPlatform).toBe('YOUTUBE');
+      }
     });
 
-    it('refuses a link that is not an https Facebook link', async () => {
-      await createProduct({ facebookVideoUrl: 'https://www.youtube.com/watch?v=abc' }).expect(400);
-      await createProduct({ facebookVideoUrl: 'http://www.facebook.com/watch/?v=1' }).expect(400);
-      await createProduct({ facebookVideoUrl: 'https://facebook.com.evil.example/v' }).expect(400);
+    it('still accepts a fb.watch short link', async () => {
+      await createProduct({
+        videoUrl: 'https://fb.watch/abc123XYZ/',
+        videoPlatform: 'FACEBOOK',
+      }).expect(201);
+    });
+
+    it('carries no video by default', async () => {
+      const created = await createProduct().expect(201);
+      expect(created.body.data.videoUrl).toBeNull();
+      expect(created.body.data.videoPlatform).toBeNull();
+    });
+
+    it('needs the platform and the URL together', async () => {
+      await createProduct({ videoUrl: youtube }).expect(400);
+      await createProduct({ videoPlatform: 'YOUTUBE' }).expect(400);
+      await createProduct({ videoUrl: null, videoPlatform: 'YOUTUBE' }).expect(400);
+    });
+
+    it('refuses a link filed under the wrong platform', async () => {
+      const res = await createProduct({ videoUrl: youtube, videoPlatform: 'FACEBOOK' }).expect(400);
+      expect(res.body.message).toMatch(/not a Facebook video/i);
+
+      await createProduct({ videoUrl: facebook, videoPlatform: 'YOUTUBE' }).expect(400);
+    });
+
+    it('refuses anything that is not an https link on either platform', async () => {
+      const cases = [
+        'http://www.youtube.com/watch?v=abc',
+        'http://www.facebook.com/watch/?v=1',
+        'https://facebook.com.evil.example/v',
+        'https://youtube.com.evil.example/watch?v=abc',
+        'https://vimeo.com/123456',
+      ];
+      for (const videoUrl of cases) {
+        await createProduct({ videoUrl, videoPlatform: 'YOUTUBE' }).expect(400);
+      }
+      await createProduct({ videoUrl: youtube, videoPlatform: 'VIMEO' }).expect(400);
+    });
+
+    it('no longer accepts the old facebookVideoUrl field', async () => {
+      // Unknown keys are a 400 everywhere on this API, so a client still sending
+      // the old name finds out at once instead of losing the video silently.
+      await createProduct({ facebookVideoUrl: facebook }).expect(400);
+    });
+
+    it('leaves the video alone on an update that does not mention it', async () => {
+      const created = await createProduct({ videoUrl: youtube, videoPlatform: 'YOUTUBE' }).expect(
+        201,
+      );
+      const id = created.body.data.id as string;
+
+      const renamed = await patch(id, { name: 'Renamed' }).expect(200);
+      expect(renamed.body.data.videoUrl).toBe(youtube);
+      expect(renamed.body.data.videoPlatform).toBe('YOUTUBE');
+    });
+
+    it('switches platform only when both fields are sent', async () => {
+      const created = await createProduct({ videoUrl: youtube, videoPlatform: 'YOUTUBE' }).expect(
+        201,
+      );
+      const id = created.body.data.id as string;
+
+      // A new URL on its own is refused, even on the platform already stored:
+      // the pair is always stated together.
+      await patch(id, { videoUrl: facebook }).expect(400);
+      await patch(id, { videoPlatform: 'FACEBOOK' }).expect(400);
+
+      const switched = await patch(id, { videoUrl: facebook, videoPlatform: 'FACEBOOK' }).expect(
+        200,
+      );
+      expect(switched.body.data.videoUrl).toBe(facebook);
+      expect(switched.body.data.videoPlatform).toBe('FACEBOOK');
     });
   });
 
