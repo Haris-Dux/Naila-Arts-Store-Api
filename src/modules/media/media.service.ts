@@ -7,6 +7,7 @@ import {
   ResourceNotFoundException,
   ValidationFailedException,
 } from '../../common/exceptions/domain.exception';
+import { Page, PaginationDto } from '../../common/dto/pagination.dto';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ContentSection, ContentSectionDocument } from '../content/schemas/content-section.schema';
@@ -54,13 +55,23 @@ export class MediaService {
 
   // ------------------------------------------------------------------- reads
 
-  async list(limit = 50): Promise<MediaResponseDto[]> {
-    const media = await this.mediaModel
-      .find({ ...notDeleted })
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .exec();
-    return media.map((item) => this.present(item));
+  async list(query: PaginationDto): Promise<Page<MediaResponseDto>> {
+    const filter = { ...notDeleted };
+    const [media, total] = await Promise.all([
+      this.mediaModel
+        .find(filter)
+        .sort({ createdAt: query.order === 'asc' ? 1 : -1 })
+        .skip(query.skip)
+        .limit(query.limit)
+        .exec(),
+      this.mediaModel.countDocuments(filter).exec(),
+    ]);
+    return Page.of(
+      media.map((item) => this.present(item)),
+      total,
+      query.page,
+      query.limit,
+    );
   }
 
   async findById(id: string): Promise<MediaResponseDto> {
@@ -107,28 +118,7 @@ export class MediaService {
    * library to install.
    */
   async upload(file: UploadedFile, actor: AuthenticatedUser): Promise<MediaResponseDto> {
-    if (file.size > MAX_UPLOAD_BYTES) {
-      throw new ValidationFailedException(
-        `An image may be at most ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`,
-        { filename: file.originalname, bytes: file.size },
-      );
-    }
-
-    const dimensions = readWebpDimensions(file.buffer);
-    if (!dimensions) {
-      throw new ValidationFailedException(
-        `"${file.originalname}" is not a WebP image. Only WebP is accepted.`,
-        { filename: file.originalname, declaredType: file.mimetype },
-      );
-    }
-
-    if (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION) {
-      throw new ValidationFailedException(`An image may be at most ${MAX_DIMENSION}px on a side`, {
-        filename: file.originalname,
-        ...dimensions,
-      });
-    }
-
+    const dimensions = this.validate(file);
     const hash = createHash('sha256').update(file.buffer).digest('hex');
 
     // Same bytes, same file. A merchant who uploads one photograph to two
@@ -166,14 +156,51 @@ export class MediaService {
   async uploadMany(files: UploadedFile[], actor: AuthenticatedUser): Promise<MediaResponseDto[]> {
     if (files.length === 0) throw new ValidationFailedException('No file was uploaded');
 
-    // Sequential on purpose: the point of an upload endpoint is that each file
-    // either lands or reports why, and a parallel map would interleave the
-    // failure of one with the disk writes of the others.
+    // Every file is checked before any is stored. Otherwise a rejection of file N
+    // fails the request after files 1..N-1 are already on disk, and the caller
+    // never learns their ids — orphans nobody can find to delete.
+    for (const file of files) this.validate(file);
+
+    // Sequential on purpose: a parallel map would interleave the failure of one
+    // write with the disk writes of the others.
     const stored: MediaResponseDto[] = [];
     for (const file of files) {
       stored.push(await this.upload(file, actor));
     }
     return stored;
+  }
+
+  /**
+   * Prove a file is an acceptable image, and return its dimensions.
+   *
+   * The format is proved from the bytes, not from the `Content-Type` the client
+   * sent or the extension it used. Pure: no I/O, so a whole batch can be checked
+   * before anything is written.
+   */
+  private validate(file: UploadedFile): { width: number; height: number } {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw new ValidationFailedException(
+        `An image may be at most ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`,
+        { filename: file.originalname, bytes: file.size },
+      );
+    }
+
+    const dimensions = readWebpDimensions(file.buffer);
+    if (!dimensions) {
+      throw new ValidationFailedException(
+        `"${file.originalname}" is not a WebP image. Only WebP is accepted.`,
+        { filename: file.originalname, declaredType: file.mimetype },
+      );
+    }
+
+    if (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION) {
+      throw new ValidationFailedException(`An image may be at most ${MAX_DIMENSION}px on a side`, {
+        filename: file.originalname,
+        ...dimensions,
+      });
+    }
+
+    return dimensions;
   }
 
   /**

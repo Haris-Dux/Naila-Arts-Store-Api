@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
@@ -18,6 +19,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { MinRole } from '../auth/decorators/roles.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
@@ -79,10 +81,10 @@ export class MediaController {
   @Get()
   @MinRole(UserRole.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Most recent uploads — what is on the disk' })
-  @ApiResponse({ status: 200, type: [MediaResponseDto] })
-  list() {
-    return this.mediaService.list();
+  @ApiOperation({ summary: 'Uploads, newest first by default — what is on the disk' })
+  @ApiResponse({ status: 200, description: 'Paginated media' })
+  list(@Query() query: PaginationDto) {
+    return this.mediaService.list(query);
   }
 
   @Get(':id')

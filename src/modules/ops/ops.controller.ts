@@ -75,6 +75,7 @@ export class OpsController {
   /** Requeue everything in the failed set — after fixing whatever broke. */
   @Post('queues/failed/retry')
   @ApiOperation({ summary: 'Retry every failed job' })
+  @ApiResponse({ status: 201, description: '`{ retried: number }` — how many jobs were requeued' })
   async retryFailed() {
     const jobs = await this.notificationsQueue.getFailed();
     for (const job of jobs) await job.retry();
@@ -137,7 +138,11 @@ export class OpsController {
   /** Return an abandoned message to the queue once the cause is fixed. */
   @Post('outbox/:id/retry')
   @ApiOperation({ summary: 'Requeue an abandoned outbox message' })
-  @ApiResponse({ status: 201, description: 'Message reset to PENDING and due immediately' })
+  @ApiResponse({
+    status: 201,
+    description:
+      '`{ requeued: boolean }` — true when the message was FAILED and is now PENDING and due immediately',
+  })
   async retryOutbox(@Param('id') id: string) {
     const result = await this.outboxModel
       .updateOne(

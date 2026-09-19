@@ -199,6 +199,11 @@ export class CreateProductDto {
   @ArrayMaxSize(MAX_PRODUCT_IMAGES, {
     message: `A product may have at most ${MAX_PRODUCT_IMAGES} images`,
   })
+  // Uploading the same bytes twice returns the same media id, so without this a
+  // product could show one photograph twice in its gallery.
+  @ArrayUnique((image: ProductImageDto | null | undefined) => image?.mediaId, {
+    message: 'Each image may appear only once',
+  })
   @ValidateNested({ each: true })
   @Type(() => ProductImageDto)
   images?: ProductImageDto[];

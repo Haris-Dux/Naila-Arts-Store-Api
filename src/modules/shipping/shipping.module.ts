@@ -4,7 +4,11 @@ import { OrdersModule } from '../orders/orders.module';
 import { Order, OrderSchema } from '../orders/schemas/order.schema';
 import { Shipment, ShipmentSchema } from './schemas/shipment.schema';
 import { ShippingController } from './shipping.controller';
-import { ShippingOrderConfirmedHandler, ShippingOutboxHandler } from './shipping.listener';
+import {
+  ShippingOrderCancelledHandler,
+  ShippingOrderConfirmedHandler,
+  ShippingOutboxHandler,
+} from './shipping.listener';
 import { ShippingService } from './shipping.service';
 
 @Module({
@@ -17,8 +21,18 @@ import { ShippingService } from './shipping.service';
     OrdersModule,
   ],
   controllers: [ShippingController],
-  providers: [ShippingService, ShippingOutboxHandler, ShippingOrderConfirmedHandler],
+  providers: [
+    ShippingService,
+    ShippingOutboxHandler,
+    ShippingOrderConfirmedHandler,
+    ShippingOrderCancelledHandler,
+  ],
   // Contributed to the dispatcher's handler list in AppModule.
-  exports: [ShippingService, ShippingOutboxHandler, ShippingOrderConfirmedHandler],
+  exports: [
+    ShippingService,
+    ShippingOutboxHandler,
+    ShippingOrderConfirmedHandler,
+    ShippingOrderCancelledHandler,
+  ],
 })
 export class ShippingModule {}

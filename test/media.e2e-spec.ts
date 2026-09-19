@@ -180,6 +180,20 @@ describe('Media (e2e)', () => {
       expect(await mediaModel.countDocuments({})).toBe(0);
     });
 
+    it('stores nothing when one file in the batch is rejected', async () => {
+      const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(60)]);
+
+      // The bad file is last, so a store-as-you-go loop would already have
+      // written the first two — orphans the caller never learns the ids of.
+      await uploadRaw([
+        { bytes: webp(1000, 1000, 1), name: 'a.webp' },
+        { bytes: webp(1000, 1000, 2), name: 'b.webp' },
+        { bytes: jpeg, name: 'sneaky.webp' },
+      ]).expect(400);
+
+      expect(await mediaModel.countDocuments({})).toBe(0);
+    });
+
     it('rejects a file over 5MB', async () => {
       // Padded past the cap; multer stops it before the handler is reached.
       const oversized = Buffer.concat([webp(100, 100), Buffer.alloc(5 * 1024 * 1024)]);
@@ -192,6 +206,28 @@ describe('Media (e2e)', () => {
         .post(api('/media'))
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(400);
+    });
+
+    it('lists uploads a page at a time, newest first', async () => {
+      const ids = await upload(3);
+
+      const first = await request(app.getHttpServer())
+        .get(api('/media?limit=2'))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      expect(first.body.data.items).toHaveLength(2);
+      expect(first.body.data.meta).toMatchObject({ total: 3, page: 1, pages: 2, hasNext: true });
+
+      const second = await request(app.getHttpServer())
+        .get(api('/media?limit=2&page=2'))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      expect(second.body.data.items).toHaveLength(1);
+
+      const listed = [...first.body.data.items, ...second.body.data.items].map(
+        (m: { id: string }) => m.id,
+      );
+      expect(new Set(listed)).toEqual(new Set(ids));
     });
 
     it('is admin-only', async () => {
@@ -263,6 +299,14 @@ describe('Media (e2e)', () => {
         images: [...ids, ...(await upload(1))].map((mediaId) => ({ mediaId })),
       }).expect(400);
       expect(JSON.stringify(rejected.body)).toMatch(/at most 8 images/i);
+    });
+
+    it('refuses the same image twice', async () => {
+      // Re-uploading the same bytes returns the same id, which is how a
+      // duplicate reaches the product form in practice.
+      const [id] = await upload(1);
+      const res = await makeProduct({ images: [{ mediaId: id }, { mediaId: id }] }).expect(400);
+      expect(JSON.stringify(res.body)).toMatch(/only once/i);
     });
 
     it('refuses an image that does not exist', async () => {

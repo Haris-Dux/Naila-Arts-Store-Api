@@ -176,7 +176,58 @@ export class PaymentsService {
     note?: string,
   ): Promise<PaymentResponseDto> {
     const payment = await this.getPaymentOrThrow(id);
+
+    // Taking money for an order that no longer exists is a refund waiting to
+    // happen. Only this path is guarded: a provider webhook reports a capture
+    // that has already happened, and that must still be recorded.
+    if (payment.status !== PaymentStatus.CAPTURED) {
+      const order = await this.getOrderOrThrow(payment.orderId.toString());
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new InvalidStateTransitionException(
+          'Payment',
+          payment.status,
+          PaymentStatus.CAPTURED,
+        );
+      }
+    }
+
     return this.settleCapture(payment, actor, note);
+  }
+
+  /**
+   * Close every open payment attempt of a cancelled order, idempotently.
+   *
+   * Conditional on the status in the filter, so a capture racing the
+   * cancellation either wins (and the payment stays CAPTURED, for a refund) or
+   * loses — never both. A payment that already moved money is left alone.
+   */
+  async cancelForOrder(orderId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(orderId)) return;
+
+    const result = await this.paymentModel
+      .updateMany(
+        {
+          orderId: new Types.ObjectId(orderId),
+          status: { $in: [PaymentStatus.PENDING, PaymentStatus.AUTHORIZED] },
+          ...notDeleted,
+        },
+        {
+          $set: { status: PaymentStatus.CANCELLED },
+          $push: {
+            events: {
+              status: PaymentStatus.CANCELLED,
+              at: new Date(),
+              by: null,
+              note: 'Order cancelled',
+            },
+          },
+        },
+      )
+      .exec();
+
+    if (result.modifiedCount > 0) {
+      this.logger.log(`Cancelled ${result.modifiedCount} open payment(s) for order ${orderId}`);
+    }
   }
 
   async refund(

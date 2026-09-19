@@ -8,7 +8,7 @@ import { OrderStatus } from '../src/modules/orders/enums/order-status.enum';
 import { Order, OrderDocument } from '../src/modules/orders/schemas/order.schema';
 import { OutboxDispatcher } from '../src/modules/outbox/outbox.dispatcher';
 import { OutboxDocument, OutboxMessage } from '../src/modules/outbox/schemas/outbox.schema';
-import { PaymentMethod } from '../src/modules/payments/enums/payment-status.enum';
+import { PaymentMethod, PaymentStatus } from '../src/modules/payments/enums/payment-status.enum';
 import { Payment, PaymentDocument } from '../src/modules/payments/schemas/payment.schema';
 import {
   WebhookEvent,
@@ -541,6 +541,113 @@ describe('Shipping & Outbox (e2e)', () => {
         .get(api('/shipments?sort=userId'))
         .set('Authorization', `Bearer ${shopperToken}`)
         .expect(400);
+    });
+  });
+
+  // ------------------------------------------------------------ cancellation
+
+  describe('cancelling an order closes its shipment and payment', () => {
+    /** A cash-on-delivery order: the payment is open and the shipment exists. */
+    const confirmedOrder = async () => {
+      const orderId = await placeOrder();
+      const payment = await request(app.getHttpServer())
+        .post(api('/payments'))
+        .set('Authorization', `Bearer ${shopperToken}`)
+        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
+        .expect(201);
+      await dispatcher.drain();
+      return { orderId, paymentId: payment.body.data.id as string };
+    };
+
+    const cancel = (orderId: string, token = shopperToken) =>
+      request(app.getHttpServer())
+        .post(api(`/orders/${orderId}/cancel`))
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(201);
+
+    it('cancels the pending shipment and the open payment', async () => {
+      const { orderId, paymentId } = await confirmedOrder();
+      expect((await shipmentFor(orderId))?.status).toBe(ShipmentStatus.PENDING);
+
+      const res = await cancel(orderId);
+      // The customer's response is unchanged; the cascade happens behind it.
+      expect(res.body.data.status).toBe(OrderStatus.CANCELLED);
+      await dispatcher.drain();
+
+      expect((await shipmentFor(orderId))?.status).toBe(ShipmentStatus.CANCELLED);
+      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(PaymentStatus.CANCELLED);
+    });
+
+    it('is safe to redeliver', async () => {
+      const { orderId } = await confirmedOrder();
+      await cancel(orderId);
+      await dispatcher.drain();
+
+      await outboxModel.updateMany(
+        { eventType: 'order.cancelled' },
+        { $set: { status: 'PENDING', availableAt: new Date() } },
+      );
+      await dispatcher.drain();
+
+      const shipment = await shipmentFor(orderId);
+      expect(shipment?.status).toBe(ShipmentStatus.CANCELLED);
+      expect(shipment?.events.filter((e) => e.status === ShipmentStatus.CANCELLED)).toHaveLength(1);
+    });
+
+    it('refuses to dispatch a cancelled order, and sends no dispatch notice', async () => {
+      const { orderId } = await confirmedOrder();
+      const shipmentId = (await shipmentFor(orderId))!._id.toString();
+      // Not drained: the guard must hold even before the cascade has run.
+      await cancel(orderId, adminToken);
+
+      await request(app.getHttpServer())
+        .post(api(`/shipments/${shipmentId}/dispatch`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ carrier: 'Royal Mail', trackingNumber: 'RM123456789GB' })
+        .expect(409);
+
+      expect((await shipmentFor(orderId))?.status).toBe(ShipmentStatus.PENDING);
+      expect(await outboxModel.countDocuments({ eventType: 'shipment.dispatched' })).toBe(0);
+    });
+
+    it('refuses to record a payment on a cancelled order', async () => {
+      const { orderId, paymentId } = await confirmedOrder();
+      // Not drained, so the payment is still open when capture is attempted.
+      await cancel(orderId, adminToken);
+
+      await request(app.getHttpServer())
+        .post(api(`/payments/${paymentId}/capture`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({})
+        .expect(409);
+
+      expect((await paymentModel.findById(paymentId).exec())?.status).not.toBe(
+        PaymentStatus.CAPTURED,
+      );
+    });
+
+    it('leaves a shipment that has already left alone', async () => {
+      const orderId = await paidOrder();
+      const shipmentId = (await shipmentFor(orderId))!._id.toString();
+      await request(app.getHttpServer())
+        .post(api(`/shipments/${shipmentId}/dispatch`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ carrier: 'Royal Mail', trackingNumber: 'RM123456789GB' })
+        .expect(201);
+
+      // SHIPPED cannot be cancelled by the order machine; force it to exercise
+      // the handler's own guard.
+      await orderModel.updateOne({ _id: orderId }, { $set: { status: OrderStatus.CANCELLED } });
+      await outboxModel.create({
+        aggregateType: 'order',
+        aggregateId: orderId,
+        eventType: 'order.cancelled',
+        payload: { orderId },
+      });
+      await dispatcher.drain();
+
+      expect((await shipmentFor(orderId))?.status).toBe(ShipmentStatus.IN_TRANSIT);
     });
   });
 });

@@ -9,7 +9,7 @@ import {
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ownsRecord } from '../../common/ownership';
-import { OrderStatus } from '../orders/enums/order-status.enum';
+import { OrderStatus, isTerminal } from '../orders/enums/order-status.enum';
 import { OrdersService } from '../orders/orders.service';
 import { OutboxService } from '../outbox/outbox.service';
 import { Order, OrderDocument } from '../orders/schemas/order.schema';
@@ -55,9 +55,17 @@ export class ShippingService {
    * a document, called `create()` with identical data, then `save()`d the first
    * one — two inserts on every order.
    */
-  async createForOrder(orderId: string): Promise<ShipmentDocument> {
+  async createForOrder(orderId: string): Promise<ShipmentDocument | null> {
     const order = await this.orderModel.findOne({ _id: orderId, ...notDeleted }).exec();
     if (!order) throw new ResourceNotFoundException('Order', orderId);
+
+    // A late or retried `order.paid` can arrive after the order was cancelled.
+    // Opening a shipment then would put a cancelled order back in the warehouse
+    // queue, so nothing is created.
+    if (isTerminal(order.status)) {
+      this.logger.warn(`Not opening a shipment for ${order.orderNumber}: order is ${order.status}`);
+      return null;
+    }
 
     const now = new Date();
     const shipment = await this.shipmentModel
@@ -95,6 +103,38 @@ export class ShippingService {
 
     this.logger.log(`Shipment ready for ${order.orderNumber} (${shipment.status})`);
     return shipment;
+  }
+
+  /**
+   * Close the shipment of a cancelled order, idempotently.
+   *
+   * Only a shipment that has not left the building can be cancelled; one already
+   * in transit is a return, which is a person's decision, not this handler's. A
+   * missing shipment is normal — an order cancelled before payment never had one.
+   */
+  async cancelForOrder(orderId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(orderId)) return;
+
+    const shipment = await this.shipmentModel
+      .findOne({ orderId: new Types.ObjectId(orderId), ...notDeleted })
+      .exec();
+    if (!shipment) return;
+
+    if (
+      shipment.status !== ShipmentStatus.PENDING &&
+      shipment.status !== ShipmentStatus.PREPARING
+    ) {
+      if (shipment.status !== ShipmentStatus.CANCELLED) {
+        this.logger.warn(
+          `Order ${shipment.orderNumber} was cancelled but its shipment is already ${shipment.status}`,
+        );
+      }
+      return;
+    }
+
+    this.applyStatus(shipment, ShipmentStatus.CANCELLED, null, null, 'Order cancelled');
+    await shipment.save();
+    this.logger.log(`Shipment for ${shipment.orderNumber} cancelled with its order`);
   }
 
   // ------------------------------------------------------------------- reads
@@ -154,6 +194,19 @@ export class ShippingService {
     actor: AuthenticatedUser,
   ): Promise<ShipmentResponseDto> {
     const shipment = await this.getDocumentOrThrow(id);
+
+    // A cancelled or refunded order must not ship. Checked before anything is
+    // saved, so the customer is never told a parcel is on its way.
+    const order = await this.orderModel
+      .findOne({ _id: shipment.orderId, ...notDeleted })
+      .select('status')
+      .exec();
+    if (
+      order &&
+      (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED)
+    ) {
+      throw new InvalidStateTransitionException('Order', order.status, OrderStatus.SHIPPED);
+    }
 
     // PENDING → IN_TRANSIT skips PREPARING, which the machine disallows, so let
     // dispatching imply it rather than forcing two calls for one real action.

@@ -60,3 +60,24 @@ export class ShippingOrderConfirmedHandler implements OutboxHandler {
     await this.delegate.handle(payload);
   }
 }
+
+/**
+ * Closes the shipment when its order is cancelled.
+ *
+ * Without this a cancelled order's shipment stayed PENDING in the warehouse
+ * queue and could still be dispatched. Idempotent: `cancelForOrder` does nothing
+ * to a shipment that is already cancelled or has left the building.
+ */
+@Injectable()
+@OutboxSubscriber()
+export class ShippingOrderCancelledHandler implements OutboxHandler {
+  readonly eventType = 'order.cancelled';
+
+  constructor(private readonly shippingService: ShippingService) {}
+
+  async handle(payload: Record<string, unknown>): Promise<void> {
+    const orderId = typeof payload.orderId === 'string' ? payload.orderId : null;
+    if (!orderId) return;
+    await this.shippingService.cancelForOrder(orderId);
+  }
+}
