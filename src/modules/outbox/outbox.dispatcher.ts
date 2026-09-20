@@ -23,6 +23,17 @@ const BATCH_SIZE = 25;
  * survives a subscriber being down, and two seconds of latency is immaterial for
  * a confirmation email or an ERP push.
  */
+/**
+ * Events recorded for completeness that nothing consumes today.
+ *
+ * Named rather than inferred, so a genuinely orphaned event still gets the
+ * warning above. Both are emitted by the order state machine for every order:
+ * fulfilment progress is already visible on the order itself, and the customer
+ * hears about dispatch through `shipment.dispatched`, which carries the
+ * tracking number this one does not.
+ */
+const UNCONSUMED_EVENTS = new Set(['order.fulfilling', 'order.shipped']);
+
 @Injectable()
 export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OutboxDispatcher.name);
@@ -110,6 +121,21 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
         if (!message) break;
 
         const handlers = this.handlersByType.get(message.eventType) ?? [];
+
+        // An empty handler list is indistinguishable from "all handlers
+        // succeeded" — the message is claimed, nothing runs, and it is marked
+        // delivered. That is exactly what a subscriber left out of its module's
+        // providers looks like, and it produces no signal anywhere: the ops
+        // view reads pending: 0, failed: 0 while customers stop receiving mail.
+        // The events that legitimately have no consumer are named so this stays
+        // quiet until something is actually wrong.
+        if (handlers.length === 0 && !UNCONSUMED_EVENTS.has(message.eventType)) {
+          this.logger.error(
+            `No handler is registered for ${message.eventType} ` +
+              `(${message._id.toString()}); marking it delivered with nothing done. ` +
+              `If a subscriber exists for it, check that its module lists it in providers.`,
+          );
+        }
 
         try {
           // Sequential and awaited, so a throw is this dispatcher's to handle.

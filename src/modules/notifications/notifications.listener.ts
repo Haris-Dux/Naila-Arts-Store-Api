@@ -113,13 +113,14 @@ export class OrderPaidNotificationHandler extends OrderNotificationHandler {
 /**
  * The three closing emails.
  *
- * `order.cancelled`, `order.refunded` and `order.delivered` were already being
+ * `order.cancelled`, `order.returned` and `order.delivered` were already being
  * recorded by the order state machine and consumed by nobody, so a customer
  * whose order was cancelled heard nothing at all.
  *
- * Cancelled and refunded are separate kinds rather than one: the order stopping
- * and the money coming back are different things to be told, and a customer
- * often receives both.
+ * Cancelled and returned are separate kinds because they are different events
+ * to be told about: an order stopped before it shipped, versus goods that went
+ * out and came back. Neither says anything about money — a refund is settled by
+ * a person and recorded against the payment, and there is no email for it.
  */
 @Injectable()
 @OutboxSubscriber()
@@ -136,11 +137,19 @@ export class OrderCancelledNotificationHandler extends OrderNotificationHandler 
   }
 }
 
+/**
+ * The closing email for an order whose goods came back.
+ *
+ * Says the parcel reached us and the order is closed — nothing about money.
+ * A refund, if one is owed, is settled by a person outside this system and
+ * recorded against the payment, so this has no way of knowing about it and
+ * deliberately does not claim to.
+ */
 @Injectable()
 @OutboxSubscriber()
-export class OrderRefundedNotificationHandler extends OrderNotificationHandler {
-  readonly eventType = 'order.refunded';
-  protected readonly kind: NotificationKind = 'orderRefunded';
+export class OrderReturnedNotificationHandler extends OrderNotificationHandler {
+  readonly eventType = 'order.returned';
+  protected readonly kind: NotificationKind = 'orderReturned';
 
   constructor(
     @InjectModel(Order.name) orderModel: Model<OrderDocument>,

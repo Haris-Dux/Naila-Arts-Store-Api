@@ -595,6 +595,67 @@ describe('Orders & Checkout (e2e)', () => {
       return res.body.data.id as string;
     };
 
+    it('still closes an order whose product has since been deleted', async () => {
+      // A retired product used to make its orders impossible to end: restocking
+      // resolves stock through the product document, and a soft-deleted one
+      // threw a 404 that failed the whole cancellation. An order must always be
+      // able to reach a terminal status.
+      const id = await placeOrder();
+      await productModel.updateOne({ _id: productId }, { $set: { deletedAt: new Date() } });
+
+      const res = await request(app.getHttpServer())
+        .post(api(`/orders/${id}/cancel`))
+        .set('Authorization', `Bearer ${shopperToken}`)
+        .send({ reason: 'Product withdrawn' })
+        .expect(201);
+
+      expect(res.body.data.status).toBe(OrderStatus.CANCELLED);
+      const order = await orderModel.findById(id).exec();
+      expect(order?.stockReleased).toBe(true);
+    });
+
+    it('restores the lines it still can when only one product was deleted', async () => {
+      const second = await request(app.getHttpServer())
+        .post(api('/products'))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'Second Piece', price: 1500, stock: 10, categoryId })
+        .expect(201);
+      const secondId = second.body.data.id as string;
+
+      addLine(shopperToken, productId, 3);
+      addLine(shopperToken, secondId, 2);
+      const id = (await checkout(shopperToken).expect(201)).body.data.id as string;
+
+      await productModel.updateOne({ _id: productId }, { $set: { deletedAt: new Date() } });
+
+      await request(app.getHttpServer())
+        .post(api(`/orders/${id}/cancel`))
+        .set('Authorization', `Bearer ${shopperToken}`)
+        .send({})
+        .expect(201);
+
+      // The surviving line goes back on the shelf; the deleted one cannot.
+      expect((await productModel.findById(secondId).exec())?.stock).toBe(10);
+    });
+
+    it('lets a customer cancel while the warehouse is still picking', async () => {
+      const id = await placeOrder();
+      await request(app.getHttpServer())
+        .patch(api(`/orders/${id}/status`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ status: OrderStatus.FULFILLING })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post(api(`/orders/${id}/cancel`))
+        .set('Authorization', `Bearer ${shopperToken}`)
+        .send({})
+        .expect(201);
+
+      expect(res.body.data.status).toBe(OrderStatus.CANCELLED);
+      expect((await productModel.findById(productId).exec())?.stock).toBe(10);
+    });
+
     it('restores stock when a customer cancels', async () => {
       const id = await placeOrder();
       expect((await productModel.findById(productId).exec())?.stock).toBe(7);
@@ -654,7 +715,7 @@ describe('Orders & Checkout (e2e)', () => {
       expect(res.body.message).toMatch(/contact support/i);
     });
 
-    it('restores stock on a refund after delivery', async () => {
+    it('restores stock when a delivered order is returned', async () => {
       const id = await placeOrder();
       for (const status of [
         OrderStatus.PAID,
@@ -672,12 +733,17 @@ describe('Orders & Checkout (e2e)', () => {
       await request(app.getHttpServer())
         .patch(api(`/orders/${id}/status`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ status: OrderStatus.REFUNDED })
+        .send({ status: OrderStatus.RETURNED })
         .expect(200);
 
-      // DELIVERED is not a stock-committed state, so a refund from it does not
-      // silently invent inventory that never came back.
-      expect((await productModel.findById(productId).exec())?.stock).toBe(7);
+      // The goods came back, so the units are sellable again. This used to
+      // assert 7 — stock stayed consumed — which left a returned parcel
+      // unsellable forever.
+      expect((await productModel.findById(productId).exec())?.stock).toBe(10);
+
+      const order = await orderModel.findById(id).exec();
+      expect(order?.stockReleased).toBe(true);
+      expect(order?.returnedAt).toBeTruthy();
     });
   });
 

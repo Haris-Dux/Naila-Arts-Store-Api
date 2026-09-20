@@ -36,13 +36,27 @@ const CATALOG: CacheNamespace = {
 export class CatalogCacheService {
   constructor(private readonly cache: VersionedCache) {}
 
-  /** Stable fingerprint of a query, independent of key order. */
+  /**
+   * Stable fingerprint of a query, independent of key order.
+   *
+   * Every part is length-prefixed rather than joined on `&` and `=`, because
+   * those characters occur in the values. `search` is free text and sorts before
+   * `sizing`, `sort` and `subcategoryId`, so
+   * `?search=x&sizing=SIZED` and `?search=x%26sizing%3DSIZED` used to flatten to
+   * the same string and therefore the same cache entry — letting an anonymous
+   * caller serve one query's results under another query's key. A length prefix
+   * cannot be forged from inside a value, because the length is counted, not
+   * parsed.
+   */
   static fingerprint(query: Record<string, unknown>): string {
     const normalised = Object.entries(query)
       .filter(([, value]) => value !== undefined && value !== null)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => `${key}=${String(value)}`)
-      .join('&');
+      .map(([key, value]) => {
+        const text = String(value);
+        return `${key.length}:${key}${text.length}:${text}`;
+      })
+      .join('');
     return createHash('sha1').update(normalised).digest('hex').slice(0, 16);
   }
 

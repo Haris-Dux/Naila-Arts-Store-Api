@@ -127,10 +127,12 @@ denormalised on every write and is what every sort and price filter runs on,
 because sorting on `price` while a promotion is running orders the storefront by
 a number nobody is being charged. Checkout charges `effectivePrice`.
 
-**`sellCount` moves only when something is actually sold.** A cancellation or
-refund brings it back down — those units never left. A supplier delivery does
-not, which is why `InventoryService.increase` takes a `StockIncreaseReason`:
-restocking a shelf must not erase real sales from the popularity ranking.
+**`sellCount` moves only when something is actually sold.** A cancellation or a
+return brings it back down — those units never left. A supplier delivery does
+not: replenishment belongs to the ERP, which books it when a branch receives the
+goods, so it never passes through `InventoryService` at all. Refunding a payment
+moves neither stock nor `sellCount` — only the order reaching a terminal status
+does.
 
 **Money is always an integer of minor units.** Use `Money` from
 `src/common/money.ts`; nothing else may do arithmetic on a price.

@@ -95,11 +95,25 @@ export class NotificationsService {
         status: NotificationStatus.SENT,
       });
     } catch (error) {
-      if (this.isDuplicateKey(error)) {
+      if (!this.isDuplicateKey(error)) throw error;
+
+      /**
+       * Someone already holds this key. Whether that means "delivered" or "we
+       * tried and it failed" decides what to do next, so ask.
+       */
+      const held = await this.logModel.findOne({ dedupeKey: job.dedupeKey }).exec();
+
+      if (!held || held.status === NotificationStatus.SENT) {
         this.logger.log(`Skipping already-sent notification ${job.dedupeKey}`);
         return;
       }
-      throw error;
+
+      // A previous attempt failed and left its record behind. Re-claim that row
+      // rather than inserting a second one, so the audit trail stays a single
+      // row per notification and the unique index keeps doing its job.
+      held.status = NotificationStatus.SENT;
+      held.error = null;
+      claim = held;
     }
 
     try {
@@ -113,9 +127,32 @@ export class NotificationsService {
       await claim.save();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      // Release the claim so the queue's retry can genuinely re-attempt —
-      // leaving it would make every retry a no-op and the email never arrive.
-      await this.logModel.deleteOne({ _id: claim._id }).exec();
+
+      /**
+       * Mark the attempt failed; do not delete it.
+       *
+       * Deleting the row was how a retry got its second chance, but it threw
+       * away the only record that anything had been attempted — and if the
+       * transport had in fact accepted the message before the connection
+       * dropped, the retry sent it again, up to five times, password reset
+       * codes included. Keeping the row means the retry re-claims it above,
+       * support can see the failure, and a delivery that really did happen is
+       * still visible as a row rather than vanishing.
+       *
+       * The residual ambiguity is real and not solvable here: a send that fails
+       * after the server accepted it is indistinguishable from one that never
+       * landed. This bounds the damage instead of hiding it.
+       */
+      try {
+        claim.status = NotificationStatus.FAILED;
+        claim.error = reason;
+        await claim.save();
+      } catch (bookkeeping) {
+        // Never let the bookkeeping failure replace the real one.
+        const note = bookkeeping instanceof Error ? bookkeeping.message : String(bookkeeping);
+        this.logger.error(`Could not record the failure of ${job.dedupeKey}: ${note}`);
+      }
+
       this.logger.error(`Failed to send ${job.kind} to ${job.recipient}: ${reason}`);
       throw error;
     }

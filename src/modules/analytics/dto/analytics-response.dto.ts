@@ -79,7 +79,7 @@ export class AnalyticsSummaryDto {
 
   @ApiProperty({
     description:
-      'These figures mutate: a cancellation or refund reduces the period the order was placed in.',
+      'These figures mutate: a cancellation or return reduces the period the order was placed in.',
   })
   generatedAt!: string;
 }

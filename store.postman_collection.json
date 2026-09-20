@@ -893,7 +893,7 @@
                 "{{orderId}}"
               ]
             },
-            "description": "One order with its items, totals, addresses and `statusHistory`.\n\n**Auth:** Bearer token — required. Someone else's order is a 404, and a guest order is reached through **Track the guest order** instead.\n**Order statuses:** `PENDING` (awaiting payment) → `PAID` → `FULFILLING` → `SHIPPED` → `DELIVERED`; or `CANCELLED` / `REFUNDED`. A cash-on-delivery order goes from `PENDING` straight to `FULFILLING`."
+            "description": "One order with its items, totals, addresses and `statusHistory`.\n\n**Auth:** Bearer token — required. Someone else's order is a 404, and a guest order is reached through **Track the guest order** instead.\n**Order statuses:** `PENDING` (awaiting payment) → `PAID` → `FULFILLING` → `SHIPPED` → `DELIVERED`; or `CANCELLED` (before dispatch) / `RETURNED` (after it). Both endings return the units to stock; neither says anything about money, which is settled outside the system. A cash-on-delivery order goes from `PENDING` straight to `FULFILLING`."
           },
           "event": [
             {

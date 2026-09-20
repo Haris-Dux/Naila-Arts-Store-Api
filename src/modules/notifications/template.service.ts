@@ -9,7 +9,7 @@ export type NotificationKind =
   | 'orderPlaced'
   | 'orderPaid'
   | 'orderCancelled'
-  | 'orderRefunded'
+  | 'orderReturned'
   | 'orderDelivered'
   | 'shipmentDispatched'
   | 'passwordResetCode'
@@ -57,7 +57,7 @@ const BODY_TEMPLATE: Record<NotificationKind, string> = {
   orderPlaced: 'order-summary',
   orderPaid: 'order-summary',
   orderCancelled: 'order-summary',
-  orderRefunded: 'order-summary',
+  orderReturned: 'order-summary',
   orderDelivered: 'order-summary',
   shipmentDispatched: 'shipment-dispatched',
   passwordResetCode: 'password-reset-code',

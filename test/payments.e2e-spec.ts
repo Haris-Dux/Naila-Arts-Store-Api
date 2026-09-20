@@ -437,7 +437,7 @@ describe('Payments (e2e)', () => {
       expect(await outboxModel.countDocuments({ eventType: 'order.paid' })).toBe(1);
     });
 
-    it('refunds in full and moves the order to REFUNDED', async () => {
+    it('refunds in full and leaves the order alone', async () => {
       await capture().expect(201);
 
       const res = await request(app.getHttpServer())
@@ -448,7 +448,11 @@ describe('Payments (e2e)', () => {
 
       expect(res.body.data.status).toBe(PaymentStatus.REFUNDED);
       expect(res.body.data.amountRefunded.amount).toBe(4998);
-      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.REFUNDED);
+
+      // Money going back says nothing about where the goods are, so the order
+      // is untouched. Whether it comes back is recorded by the warehouse
+      // marking it RETURNED, which is what restores stock.
+      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.PAID);
     });
 
     it('refunds in part, leaving the order standing', async () => {

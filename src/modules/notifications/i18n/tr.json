@@ -34,15 +34,15 @@
     "preheader": "{{orderNumber}} numaralı siparişiniz iptal edildi.",
     "heading": "Siparişiniz iptal edildi",
     "intro": "Bu sipariş hazırlanmayacak ve ürünler yeniden stoğa alındı.",
-    "nextSteps": "Bu sipariş için ödeme yaptıysanız, iadesi ayrıca yapılır ve yola çıktığında size e-posta göndeririz."
+    "nextSteps": "Bu sipariş için ödeme yaptıysanız geri ödemenizi ayrıca düzenleyeceğiz. Bir sorun görürseniz bu e-postayı yanıtlayın."
   },
-  "orderRefunded": {
-    "subject": "{{orderNumber}} numaralı siparişinizin iadesi yolda",
-    "status": "İade yapıldı",
-    "preheader": "{{orderNumber}} numaralı siparişinizi iade ettik.",
-    "heading": "İadeniz yolda",
-    "intro": "Bu siparişin tamamını iade ettik.",
-    "nextSteps": "İadeler bankanıza bağlı olarak genellikle birkaç iş günü içinde hesabınıza geçer."
+  "orderReturned": {
+    "subject": "{{orderNumber}} numaralı siparişinizin iadesini aldık",
+    "status": "Sipariş iade edildi",
+    "preheader": "{{orderNumber}} numaralı sipariş bize geri ulaştı.",
+    "heading": "İadeniz bize ulaştı",
+    "intro": "Bu sipariş bize geri ulaştı ve artık kapatıldı.",
+    "nextSteps": "Bu sipariş için ödeme yaptıysanız geri ödemenizi ayrıca düzenleyeceğiz. Bir sorun görürseniz bu e-postayı yanıtlayın."
   },
   "orderDelivered": {
     "subject": "{{orderNumber}} numaralı siparişiniz teslim edildi",

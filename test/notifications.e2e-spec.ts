@@ -233,6 +233,16 @@ describe('Notifications (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ status });
 
+    /** Walk an order out to a returned parcel. */
+    const returnedOrder = async () => {
+      const orderId = await placeOrder();
+      for (const status of ['FULFILLING', 'SHIPPED']) {
+        await setStatus(orderId, status).expect(200);
+      }
+      await setStatus(orderId, 'RETURNED').expect(200);
+      return orderId;
+    };
+
     it('tells the customer when their order is cancelled', async () => {
       // The event was already being recorded and consumed by nobody, so a
       // cancelled customer previously heard nothing at all.
@@ -248,16 +258,30 @@ describe('Notifications (e2e)', () => {
       expect(cancelled[0].html).toMatch(/back into stock/i);
     });
 
-    it('tells the customer when their order is refunded', async () => {
-      const orderId = await placeOrder();
-      await payOrder(orderId);
-      await setStatus(orderId, 'REFUNDED').expect(200);
+    it('tells the customer when their order comes back, and promises no money', async () => {
+      // Whether a refund is owed is settled by a person outside this system, so
+      // the closing email must not claim one happened.
+      await returnedOrder();
       await dispatcher.drain();
 
-      const refunded = sentMails().filter((m) => /refund for order/i.test(m.subject));
+      const returned = sentMails().filter((m) => /received your return/i.test(m.subject));
 
-      expect(refunded).toHaveLength(1);
-      expect(refunded[0].html).toMatch(/refunded this order in full/i);
+      expect(returned).toHaveLength(1);
+      expect(returned[0].to).toBe('shopper@example.com');
+      expect(returned[0].html).not.toMatch(/refunded this order/i);
+    });
+
+    it('sends exactly one return email however often the event is redelivered', async () => {
+      await returnedOrder();
+      await dispatcher.drain();
+
+      await outboxModel.updateMany(
+        { eventType: 'order.returned' },
+        { $set: { status: 'PENDING', availableAt: new Date() } },
+      );
+      await dispatcher.drain();
+
+      expect(sentMails().filter((m) => /received your return/i.test(m.subject))).toHaveLength(1);
     });
 
     it('tells the customer when their parcel arrives', async () => {
@@ -370,26 +394,33 @@ describe('Notifications (e2e)', () => {
   });
 
   describe('failure handling', () => {
-    it('releases the dedupe claim when sending fails, so a retry can re-send', async () => {
+    it('records a failed send and lets a retry re-claim it', async () => {
       sendSpy.mockRejectedValueOnce(new Error('SMTP unavailable'));
 
       await placeOrder();
       await dispatcher.drain();
 
-      // Nothing sent, and — critically — no log row left behind. A stale claim
-      // would make every retry a silent no-op and the email would never arrive.
-      expect(await logModel.countDocuments({})).toBe(0);
+      // Nothing sent — but the attempt is kept, marked FAILED, rather than
+      // deleted. Deleting it used to be how the retry got its second chance,
+      // and it threw away the only evidence anything had been tried; worse, a
+      // send that the server had already accepted before the connection dropped
+      // was then sent all over again.
+      const failed = await logModel.findOne({ kind: 'orderPlaced' }).exec();
+      expect(failed?.status).toBe('FAILED');
+      expect(failed?.error).toMatch(/SMTP unavailable/);
 
       // The outbox message stays pending and backs off for retry.
       const message = await outboxModel.findOne({ eventType: 'order.placed' }).exec();
       expect(message?.status).toBe('PENDING');
       expect(message?.lastError).toMatch(/SMTP unavailable/);
 
-      // A later attempt succeeds and the customer gets their email.
+      // A later attempt re-claims that same row and the customer gets their
+      // email — one log row throughout, so the unique index still holds.
       await outboxModel.updateMany({}, { $set: { availableAt: new Date() } });
       await dispatcher.drain();
       expect(sentMails().length).toBeGreaterThanOrEqual(1);
       expect(await logModel.countDocuments({ kind: 'orderPlaced' })).toBe(1);
+      expect((await logModel.findOne({ kind: 'orderPlaced' }).exec())?.status).toBe('SENT');
     });
 
     it('does not retry forever when the order has been removed', async () => {

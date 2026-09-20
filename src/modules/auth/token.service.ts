@@ -91,38 +91,56 @@ export class TokenService {
    * that has already been rotated means it leaked — the legitimate holder and
    * the attacker cannot both have it. In that case the entire family is revoked,
    * forcing a real re-login rather than letting a thief ride the chain.
+   *
+   * **The consume is the first thing that happens, and it is atomic.** This used
+   * to read the record, check `revokedAt`, resolve the user, and only then write
+   * the revocation — three round trips between the check and the act. Two
+   * parallel refreshes with the same stolen token both observed `revokedAt:
+   * null`, both passed, and both issued: two live tokens in one family and the
+   * reuse branch never fired, which is precisely the attack rotation exists to
+   * stop. Claiming the row in the filter makes the check and the consume one
+   * operation, so exactly one caller can ever win.
    */
   async consumeAndRotate(
     presented: string,
     resolveUser: (userId: string) => Promise<UserDocument | null>,
     client: ClientContext = {},
   ): Promise<TokenPair> {
+    const tokenHash = TokenService.hash(presented);
+
     const record = await this.refreshTokenModel
-      .findOne({ tokenHash: TokenService.hash(presented) })
+      .findOneAndUpdate(
+        { tokenHash, revokedAt: null, expiresAt: { $gt: new Date() } },
+        { $set: { revokedAt: new Date(), revokedReason: 'rotated' } },
+        { new: true },
+      )
       .exec();
 
-    if (!record) throw new AuthenticationException('Invalid refresh token');
+    if (!record) {
+      // Nothing was claimed. Re-read to tell the three reasons apart, because
+      // they are not equally serious: an unknown token is noise, an expired one
+      // is routine, but a token that was already consumed means it leaked — or
+      // that the legitimate client fired two refreshes at once. Revoking the
+      // family is the safe response to both.
+      const existing = await this.refreshTokenModel.findOne({ tokenHash }).exec();
 
-    if (record.revokedAt) {
-      await this.revokeFamily(record.family, 'reuse-detected');
-      throw new AuthenticationException('Refresh token has already been used');
-    }
+      if (!existing) throw new AuthenticationException('Invalid refresh token');
 
-    if (record.expiresAt.getTime() <= Date.now()) {
+      if (existing.revokedAt) {
+        await this.revokeFamily(existing.family, 'reuse-detected');
+        throw new AuthenticationException('Refresh token has already been used');
+      }
+
       throw new AuthenticationException('Refresh token has expired');
     }
 
     const user = await resolveUser(record.userId.toString());
     if (!user) {
+      // The token is already spent, so the family revocation is what stops the
+      // rest of the chain being usable.
       await this.revokeFamily(record.family, 'user-unavailable');
       throw new AuthenticationException('Account is no longer active');
     }
-
-    // The stored version is authoritative — this is where a revocation that
-    // outlived the Redis entry is caught.
-    record.revokedAt = new Date();
-    record.revokedReason = 'rotated';
-    await record.save();
 
     return this.issue(user, record.family, client);
   }

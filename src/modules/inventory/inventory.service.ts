@@ -150,7 +150,7 @@ export class InventoryService {
   }
 
   /**
-   * Put units from a cancelled or refunded order back on the shelf.
+   * Put units from a cancelled or returned order back on the shelf.
    *
    * Always un-counts the sale, because a return is the only way stock goes up
    * here now. Supplier deliveries used to land in this method too and had to
@@ -193,7 +193,7 @@ export class InventoryService {
     if (!session) await this.invalidateCache([productId]);
   }
 
-  /** Units coming back from a cancelled or refunded order. */
+  /** Units coming back from a cancelled or returned order. */
   async restoreMany(lines: StockLine[], session?: ClientSession): Promise<void> {
     for (const line of lines) {
       await this.restore(line.productId, line.quantity, session);

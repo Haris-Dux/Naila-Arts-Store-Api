@@ -34,7 +34,7 @@ const SAMPLES: Record<NotificationKind, Record<string, unknown>> = {
   orderPlaced: { order },
   orderPaid: { order },
   orderCancelled: { order },
-  orderRefunded: { order },
+  orderReturned: { order },
   orderDelivered: { order },
   shipmentDispatched: {
     shipment: {

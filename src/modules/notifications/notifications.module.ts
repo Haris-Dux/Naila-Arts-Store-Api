@@ -10,7 +10,7 @@ import {
   OrderDeliveredNotificationHandler,
   OrderPaidNotificationHandler,
   OrderPlacedNotificationHandler,
-  OrderRefundedNotificationHandler,
+  OrderReturnedNotificationHandler,
   ShipmentDispatchedNotificationHandler,
 } from './notifications.listener';
 import { NotificationsProcessor } from './notifications.processor';
@@ -44,7 +44,7 @@ import { TemplateService } from './template.service';
     // Registered, not just written: the dispatcher finds subscribers through
     // DiscoveryService, which only sees providers.
     OrderCancelledNotificationHandler,
-    OrderRefundedNotificationHandler,
+    OrderReturnedNotificationHandler,
     OrderDeliveredNotificationHandler,
     ShipmentDispatchedNotificationHandler,
   ],

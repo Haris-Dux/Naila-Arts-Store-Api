@@ -176,7 +176,7 @@ export class Product extends BaseSchemaClass {
    * Units sold, all time. Maintained by `InventoryService`, which is the only
    * writer of `stock` and therefore the only place that knows a sale happened.
    *
-   * Reduced when an order is cancelled or refunded — those units never left —
+   * Reduced when an order is cancelled or returned — those units never left —
    * but *not* when a delivery arrives, which is stock movement without a sale.
    */
   @Prop({ type: Number, default: 0, min: 0 })

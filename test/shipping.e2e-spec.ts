@@ -440,8 +440,8 @@ describe('Shipping & Outbox (e2e)', () => {
 
     it('records the parcel move even when the order cannot follow', async () => {
       await dispatchIt().expect(201);
-      // Refunding leaves the order terminal.
-      await orderModel.updateOne({ _id: orderId }, { $set: { status: OrderStatus.REFUNDED } });
+      // Cancelling leaves the order terminal.
+      await orderModel.updateOne({ _id: orderId }, { $set: { status: OrderStatus.CANCELLED } });
 
       const res = await request(app.getHttpServer())
         .patch(api(`/shipments/${shipmentId}/status`))
@@ -451,7 +451,7 @@ describe('Shipping & Outbox (e2e)', () => {
 
       // The parcel physically arrived; that fact must be recorded regardless.
       expect(res.body.data.status).toBe(ShipmentStatus.DELIVERED);
-      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.REFUNDED);
+      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.CANCELLED);
     });
   });
 
@@ -648,6 +648,135 @@ describe('Shipping & Outbox (e2e)', () => {
       await dispatcher.drain();
 
       expect((await shipmentFor(orderId))?.status).toBe(ShipmentStatus.IN_TRANSIT);
+    });
+  });
+  /**
+   * A parcel that comes back.
+   *
+   * Stock is 10 and every order takes 2, so a restored order reads 10 again and
+   * one that never came back reads 8. That single number is what these tests
+   * turn on.
+   */
+  describe('a returned parcel', () => {
+    /** COD: confirmed so the shipment exists, but never captured. */
+    const codOrder = async () => {
+      const orderId = await placeOrder();
+      const payment = await request(app.getHttpServer())
+        .post(api('/payments'))
+        .set('Authorization', `Bearer ${shopperToken}`)
+        .send({ orderId, method: PaymentMethod.CASH_ON_DELIVERY })
+        .expect(201);
+      await dispatcher.drain();
+      return { orderId, paymentId: payment.body.data.id as string };
+    };
+
+    const dispatchIt = async (orderId: string) => {
+      const shipment = await shipmentFor(orderId);
+      await request(app.getHttpServer())
+        .post(api(`/shipments/${shipment!._id.toString()}/dispatch`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ carrier: 'TCS', trackingNumber: '1212' })
+        .expect(201);
+      return shipment!._id.toString();
+    };
+
+    const setShipmentStatus = (shipmentId: string, status: ShipmentStatus) =>
+      request(app.getHttpServer())
+        .patch(api(`/shipments/${shipmentId}/status`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ status });
+
+    const stock = async () => (await productModel.findById(productId).exec())?.stock;
+
+    it('restocks and closes the order when a delivered parcel comes back', async () => {
+      const { orderId } = await codOrder();
+      const shipmentId = await dispatchIt(orderId);
+      await setShipmentStatus(shipmentId, ShipmentStatus.DELIVERED).expect(200);
+      expect(await stock()).toBe(8);
+
+      await setShipmentStatus(shipmentId, ShipmentStatus.RETURNED).expect(200);
+
+      expect((await shipmentFor(orderId))?.status).toBe(ShipmentStatus.RETURNED);
+      expect(await stock()).toBe(10);
+
+      const order = await orderModel.findById(orderId).exec();
+      expect(order?.status).toBe(OrderStatus.RETURNED);
+      expect(order?.stockReleased).toBe(true);
+      expect(order?.returnedAt).toBeTruthy();
+    });
+
+    it('restocks a parcel refused at the door, which never reached DELIVERED', async () => {
+      // The cash-on-delivery case: the customer declines on arrival, so the
+      // order is still SHIPPED when the goods come back.
+      const { orderId, paymentId } = await codOrder();
+      const shipmentId = await dispatchIt(orderId);
+      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.SHIPPED);
+
+      await setShipmentStatus(shipmentId, ShipmentStatus.RETURNED).expect(200);
+
+      expect(await stock()).toBe(10);
+      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.RETURNED);
+
+      // The open cash-on-delivery attempt is closed rather than left inviting a
+      // later capture against goods already back on the shelf.
+      await dispatcher.drain();
+      expect((await paymentModel.findById(paymentId).exec())?.status).toBe(PaymentStatus.CANCELLED);
+    });
+
+    it('refuses to record payment against a returned order', async () => {
+      const { orderId, paymentId } = await codOrder();
+      const shipmentId = await dispatchIt(orderId);
+      await setShipmentStatus(shipmentId, ShipmentStatus.RETURNED).expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post(api(`/payments/${paymentId}/capture`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('INVALID_STATE_TRANSITION');
+    });
+
+    it('still closes the order when the product has since been deleted', async () => {
+      // The parcel physically moved, so that must be recorded whatever the
+      // order does. This used to throw a 404 out of the mirror *after* the
+      // shipment had been saved — and repeating the request short-circuits on
+      // the status it already holds, so the order was stranded with no way back.
+      const { orderId } = await codOrder();
+      const shipmentId = await dispatchIt(orderId);
+      await productModel.updateOne({ _id: productId }, { $set: { deletedAt: new Date() } });
+
+      await setShipmentStatus(shipmentId, ShipmentStatus.RETURNED).expect(200);
+
+      expect((await shipmentFor(orderId))?.status).toBe(ShipmentStatus.RETURNED);
+      expect((await orderModel.findById(orderId).exec())?.status).toBe(OrderStatus.RETURNED);
+    });
+
+    it('restocks exactly once however many times the return is recorded', async () => {
+      const { orderId } = await codOrder();
+      const shipmentId = await dispatchIt(orderId);
+
+      await setShipmentStatus(shipmentId, ShipmentStatus.RETURNED).expect(200);
+      await setShipmentStatus(shipmentId, ShipmentStatus.RETURNED).expect(200);
+
+      expect(await stock()).toBe(10);
+      const shipment = await shipmentFor(orderId);
+      expect(shipment?.events.filter((e) => e.status === ShipmentStatus.RETURNED)).toHaveLength(1);
+    });
+
+    it('can be recorded on the order directly when the parcel was never tracked', async () => {
+      // The recovery path if the shipment mirror ever fails: RETURNED is an
+      // ordinary order status staff can set from the order screen.
+      const { orderId } = await codOrder();
+      await dispatchIt(orderId);
+
+      await request(app.getHttpServer())
+        .patch(api(`/orders/${orderId}/status`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ status: OrderStatus.RETURNED })
+        .expect(200);
+
+      expect(await stock()).toBe(10);
     });
   });
 });

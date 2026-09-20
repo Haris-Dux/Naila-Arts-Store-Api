@@ -81,3 +81,27 @@ export class ShippingOrderCancelledHandler implements OutboxHandler {
     await this.shippingService.cancelForOrder(orderId);
   }
 }
+
+/**
+ * Records the shipment as returned when the order was closed directly.
+ *
+ * Symmetry with `ShippingOrderCancelledHandler`: `order.cancelled` has always
+ * reached back into shipping, and `order.returned` needs the same, or an order
+ * marked returned from the order screen leaves its parcel reading DELIVERED.
+ * The reverse direction (shipment RETURNED closes the order) is the mirror in
+ * ShippingService and is unaffected — this is idempotent, so the two meeting in
+ * the middle is a no-op.
+ */
+@Injectable()
+@OutboxSubscriber()
+export class ShippingOrderReturnedHandler implements OutboxHandler {
+  readonly eventType = 'order.returned';
+
+  constructor(private readonly shippingService: ShippingService) {}
+
+  async handle(payload: Record<string, unknown>): Promise<void> {
+    const orderId = typeof payload.orderId === 'string' ? payload.orderId : null;
+    if (!orderId) return;
+    await this.shippingService.markReturnedForOrder(orderId);
+  }
+}

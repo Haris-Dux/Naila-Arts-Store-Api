@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EVENTS } from '../../events/domain-events';
 import {
   ConflictException,
   ResourceNotFoundException,
@@ -23,6 +25,7 @@ export class SizesService {
   constructor(
     @InjectModel(Size.name) private readonly sizeModel: Model<SizeDocument>,
     @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ------------------------------------------------------------------- reads
@@ -66,7 +69,15 @@ export class SizesService {
     if (dto.order !== undefined) size.order = dto.order;
     if (dto.isActive !== undefined) size.isActive = dto.isActive;
 
+    // Announce before returning, not after: a product's cached view embeds the
+    // size's `name` and `code`, so renaming M from "Medium" to "Regular" used to
+    // leave every product page showing the old name until its entry aged out a
+    // day later. Categories already announce for the same reason; sizes were
+    // missed because the module comment only reasoned about category *ids*.
+    const touched = size.modifiedPaths().length > 0;
     await size.save();
+    if (touched) await this.eventEmitter.emitAsync(EVENTS.PRODUCTS_CHANGED, { productIds: [] });
+
     return SizeResponseDto.from(size);
   }
 

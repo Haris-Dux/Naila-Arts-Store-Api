@@ -10,7 +10,7 @@ import {
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ownsRecord } from '../../common/ownership';
-import { InventoryService, StockLine } from '../inventory/inventory.service';
+import { InventoryService } from '../inventory/inventory.service';
 import { OutboxService } from '../outbox/outbox.service';
 import { UserRole, roleAtLeast } from '../users/enums/user-role.enum';
 import { ListOrdersDto } from './dto/list-orders.dto';
@@ -18,7 +18,6 @@ import { OrderResponseDto } from './dto/order-response.dto';
 import {
   CUSTOMER_CANCELLABLE_STATUSES,
   OrderStatus,
-  STOCK_COMMITTED_STATUSES,
   canTransition,
   isTerminal,
 } from './enums/order-status.enum';
@@ -120,9 +119,16 @@ export class OrdersService {
           throw new InvalidStateTransitionException('Order', order.status, next);
         }
 
-        // Returning to stock and moving status must commit together, or a
-        // cancellation can leave stock permanently consumed.
-        if (this.releasesStock(order.status, next)) {
+        /**
+         * Reaching an ending returns the units, and that commits with the
+         * status change or a cancellation could consume stock permanently.
+         *
+         * Terminality alone is the whole rule. There are exactly two endings
+         * and the machine keeps them on opposite sides of dispatch: CANCELLED
+         * is unreachable once the parcel has left, RETURNED unreachable before
+         * it has. So either ending means the units are back with us.
+         */
+        if (isTerminal(next)) {
           restockedProductIds = await this.restoreStock(order, session);
         }
 
@@ -150,7 +156,7 @@ export class OrdersService {
 
       const order = updated!;
 
-      // A cancellation or refund put stock back; the cached catalogue view still
+      // A cancellation or return put stock back; the cached catalogue view still
       // shows the pre-restock figure until it is retired. After the commit, for
       // the same reason as in CheckoutService.
       if (restockedProductIds.length > 0) {
@@ -217,26 +223,55 @@ export class OrdersService {
     throw new ResourceNotFoundException('Order', order._id.toString());
   }
 
-  /** Leaving a stock-committed state for a terminal one returns the units. */
-  private releasesStock(from: OrderStatus, to: OrderStatus): boolean {
-    const terminal = to === OrderStatus.CANCELLED || to === OrderStatus.REFUNDED;
-    return terminal && STOCK_COMMITTED_STATUSES.includes(from);
-  }
-
-  /** Returns the ids whose stock was returned, for post-commit cache invalidation. */
+  /**
+   * Put the order's units back, and report which products moved so the caller
+   * can retire their cached figures after the commit.
+   *
+   * Tolerant of a line whose product no longer exists, and that is the whole
+   * point. `InventoryService` resolves stock through the product document and
+   * throws when it has been soft-deleted — so a single retired product used to
+   * make its orders impossible to close: cancelling 404'd, and a returned
+   * parcel left the order stranded mid-transition with the shipment already
+   * saved. An order must always be able to reach an ending. The units that
+   * still have somewhere to go are restored; the rest are logged loudly enough
+   * for someone to reconcile by hand.
+   */
   private async restoreStock(order: OrderDocument, session: ClientSession): Promise<string[]> {
     // The flag is the guard against restocking twice — a second cancellation, or
     // a retry of a transaction that already committed the restock.
     if (order.stockReleased) return [];
 
-    const lines: StockLine[] = order.items.map((item) => ({
-      productId: item.productId.toString(),
-      quantity: item.quantity,
-    }));
+    const restored: string[] = [];
+    const skipped: string[] = [];
 
-    await this.inventoryService.restoreMany(lines, session);
+    for (const item of order.items) {
+      const productId = item.productId.toString();
+      try {
+        await this.inventoryService.restore(productId, item.quantity, session);
+        restored.push(productId);
+      } catch (error) {
+        // Only a product that can no longer be resolved is survivable. Anything
+        // else — a write conflict, a lost connection — must still abort the
+        // transaction, or the order would close claiming a restock that never
+        // happened.
+        if (!(error instanceof ResourceNotFoundException)) throw error;
+        skipped.push(productId);
+      }
+    }
+
+    if (skipped.length > 0) {
+      this.logger.warn(
+        `Order ${order.orderNumber} closed without restocking ${skipped.length} line(s): ` +
+          `product(s) ${skipped.join(', ')} no longer exist. Adjust stock by hand if those ` +
+          `units came back.`,
+      );
+    }
+
+    // The latch is set even when some lines were skipped: those units have no
+    // home to go back to, and leaving it false would let a later transition
+    // restock the surviving lines a second time.
     order.stockReleased = true;
-    return lines.map((line) => line.productId);
+    return restored;
   }
 
   private applyStatus(
@@ -250,5 +285,6 @@ export class OrdersService {
 
     if (next === OrderStatus.PAID) order.paidAt = new Date();
     if (next === OrderStatus.CANCELLED) order.cancelledAt = new Date();
+    if (next === OrderStatus.RETURNED) order.returnedAt = new Date();
   }
 }

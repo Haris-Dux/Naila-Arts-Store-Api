@@ -82,4 +82,6 @@ export class OrderTrackingDto {
   @ApiProperty({ type: [OrderTrackingStepDto] }) statusHistory!: OrderTrackingStepDto[];
   @ApiProperty() placedAt!: Date;
   @ApiPropertyOptional({ type: Date, nullable: true }) cancelledAt!: Date | null;
+  // The two endings are co-equal, so a guest sees a timestamp for either.
+  @ApiPropertyOptional({ type: Date, nullable: true }) returnedAt!: Date | null;
 }

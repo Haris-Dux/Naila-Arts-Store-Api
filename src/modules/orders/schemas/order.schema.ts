@@ -188,9 +188,19 @@ export class Order extends BaseSchemaClass {
   @Prop({ type: Date, default: null })
   cancelledAt!: Date | null;
 
+  @Prop({ type: Date, default: null })
+  returnedAt!: Date | null;
+
   /**
-   * True once stock has been returned to the shelf, so a double cancellation can
-   * never restock twice.
+   * True once stock has been returned to the shelf, so nothing restocks twice.
+   *
+   * Whole-order granularity is only safe because an order has exactly one
+   * shipment — `createForOrder` upserts on a unique `orderId`. A partial-return
+   * feature would break this latch silently and needs per-line tracking.
+   *
+   * Written in the same transaction as the increment, and the order is re-read
+   * inside that transaction, so a `withTransaction` retry correctly redoes the
+   * restock rather than skipping it.
    */
   @Prop({ type: Boolean, default: false })
   stockReleased!: boolean;

@@ -50,6 +50,7 @@ export class OrderResponseDto {
   @ApiProperty() placedAt!: Date;
   @ApiPropertyOptional({ type: Date, nullable: true }) paidAt!: Date | null;
   @ApiPropertyOptional({ type: Date, nullable: true }) cancelledAt!: Date | null;
+  @ApiPropertyOptional({ type: Date, nullable: true }) returnedAt!: Date | null;
   @ApiProperty() createdAt!: Date;
 
   static from(this: void, order: OrderDocument): OrderResponseDto {
@@ -94,6 +95,7 @@ export class OrderResponseDto {
       placedAt: order.placedAt,
       paidAt: order.paidAt,
       cancelledAt: order.cancelledAt,
+      returnedAt: order.returnedAt,
       createdAt: order.createdAt,
     };
   }

@@ -3,7 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Order, OrderSchema } from '../orders/schemas/order.schema';
 import { OrdersModule } from '../orders/orders.module';
 import { PaymentsController } from './payments.controller';
-import { PaymentsOrderCancelledHandler } from './payments.listener';
+import { PaymentsOrderCancelledHandler, PaymentsOrderReturnedHandler } from './payments.listener';
 import { PaymentsService } from './payments.service';
 import { ManualPaymentProvider } from './provider/manual-payment.provider';
 import { PAYMENT_PROVIDERS, PaymentProvider } from './provider/payment-provider.interface';
@@ -24,6 +24,7 @@ import { WebhookEvent, WebhookEventSchema } from './schemas/webhook-event.schema
   providers: [
     PaymentsService,
     PaymentsOrderCancelledHandler,
+    PaymentsOrderReturnedHandler,
     ManualPaymentProvider,
     {
       /**

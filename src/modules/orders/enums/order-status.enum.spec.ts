@@ -2,7 +2,6 @@ import {
   CUSTOMER_CANCELLABLE_STATUSES,
   ORDER_TRANSITIONS,
   OrderStatus,
-  STOCK_COMMITTED_STATUSES,
   canTransition,
   isTerminal,
 } from './order-status.enum';
@@ -52,7 +51,7 @@ describe('Order state machine', () => {
     // PENDING → FULFILLING exists for COD; PENDING → SHIPPED must not, or an
     // order could reach a customer with no shipment record behind it.
     expect(canTransition(OrderStatus.PENDING, OrderStatus.SHIPPED)).toBe(false);
-    expect(canTransition(OrderStatus.PENDING, OrderStatus.REFUNDED)).toBe(false);
+    expect(canTransition(OrderStatus.PENDING, OrderStatus.RETURNED)).toBe(false);
   });
 
   it('refuses to move backwards', () => {
@@ -61,9 +60,9 @@ describe('Order state machine', () => {
     expect(canTransition(OrderStatus.PAID, OrderStatus.PENDING)).toBe(false);
   });
 
-  it('treats CANCELLED and REFUNDED as terminal, and nothing else', () => {
+  it('treats CANCELLED and RETURNED as terminal, and nothing else', () => {
     const terminal = ALL.filter(isTerminal);
-    expect(terminal.sort()).toEqual([OrderStatus.CANCELLED, OrderStatus.REFUNDED].sort());
+    expect(terminal.sort()).toEqual([OrderStatus.CANCELLED, OrderStatus.RETURNED].sort());
 
     // Nothing leads out of a terminal state, from anywhere.
     for (const status of terminal) {
@@ -73,28 +72,55 @@ describe('Order state machine', () => {
     }
   });
 
-  it('lets an order be cancelled from anywhere stock is still committed', () => {
-    for (const status of STOCK_COMMITTED_STATUSES) {
-      expect(canTransition(status, OrderStatus.CANCELLED)).toBe(true);
-    }
-  });
+  /**
+   * The two endings sit on opposite sides of dispatch, and that is the whole
+   * restock rule: the service returns units whenever an order goes terminal,
+   * because either ending means the goods are back with us. If these two tests
+   * ever fail, that shortcut is no longer safe.
+   */
+  describe('the two endings', () => {
+    const BEFORE_DISPATCH = [OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.FULFILLING];
+    const AFTER_DISPATCH = [OrderStatus.SHIPPED, OrderStatus.DELIVERED];
 
-  it('holds stock exactly while it is unreceived and unreleased', () => {
-    // The set that decides whether cancelling returns units to the shelf.
-    expect([...STOCK_COMMITTED_STATUSES].sort()).toEqual(
-      [OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.FULFILLING].sort(),
-    );
-    // DELIVERED is absent on purpose: refunding a delivered order must not
-    // invent inventory that never physically came back.
-    expect(STOCK_COMMITTED_STATUSES).not.toContain(OrderStatus.DELIVERED);
+    it('allows cancelling only before the parcel leaves', () => {
+      for (const from of BEFORE_DISPATCH) {
+        expect(canTransition(from, OrderStatus.CANCELLED)).toBe(true);
+      }
+      for (const from of AFTER_DISPATCH) {
+        expect(canTransition(from, OrderStatus.CANCELLED)).toBe(false);
+      }
+    });
+
+    it('allows returning only after the parcel leaves', () => {
+      for (const from of AFTER_DISPATCH) {
+        expect(canTransition(from, OrderStatus.RETURNED)).toBe(true);
+      }
+      for (const from of BEFORE_DISPATCH) {
+        expect(canTransition(from, OrderStatus.RETURNED)).toBe(false);
+      }
+    });
+
+    it('lets a refused parcel be returned without ever being delivered', () => {
+      // Cash on delivery: the customer declines at the door, so the order never
+      // reaches DELIVERED but the goods still come back.
+      expect(canTransition(OrderStatus.SHIPPED, OrderStatus.RETURNED)).toBe(true);
+    });
+
+    it('models no refund at all', () => {
+      // Money is settled by a person outside this system and recorded against
+      // the payment. An order status meaning "refunded" is what made returns
+      // complicated before.
+      expect(Object.values(OrderStatus)).not.toContain('REFUNDED');
+    });
   });
 
   it('lets a customer cancel only before the parcel leaves', () => {
     expect([...CUSTOMER_CANCELLABLE_STATUSES].sort()).toEqual(
-      [OrderStatus.PENDING, OrderStatus.PAID].sort(),
+      [OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.FULFILLING].sort(),
     );
+    // Right up until the parcel is handed to the carrier, but no further.
     expect(CUSTOMER_CANCELLABLE_STATUSES).not.toContain(OrderStatus.SHIPPED);
-    expect(CUSTOMER_CANCELLABLE_STATUSES).not.toContain(OrderStatus.FULFILLING);
+    expect(CUSTOMER_CANCELLABLE_STATUSES).not.toContain(OrderStatus.DELIVERED);
   });
 
   it('never lists a status as a transition to itself', () => {

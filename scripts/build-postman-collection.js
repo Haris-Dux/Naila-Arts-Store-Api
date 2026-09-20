@@ -1,4 +1,6 @@
 /**
+ * ⚠️  STALE — DO NOT RUN. See the warning below before touching this file.
+ *
  * Generates the Postman collection for the customer-facing store.
  *
  * Only what the storefront (website or app) integrates is in it — nothing
@@ -11,6 +13,37 @@
  * It is also a runnable smoke suite: the folders run top to bottom and hand ids
  * to each other through collection variables, with no admin calls — so the shop
  * needs at least one published, in-stock product.
+ */
+/**
+ * ⚠️  THIS GENERATOR IS OUT OF DATE AND MUST NOT BE RUN AS-IS.
+ *
+ * Two separate problems, and the second is what hid the first:
+ *
+ * 1. Its output path is wrong. `join(__dirname, '..', '..', …)` resolves to the
+ *    directory *above* the repository, so running this writes a stray file
+ *    outside the project and never updates `store.postman_collection.json`.
+ *
+ * 2. Because of (1) nobody noticed it drifting, and the committed collection has
+ *    been maintained by hand ever since. The collection is now the accurate
+ *    document and this script is ~31 hunks behind it. Regenerating would
+ *    replace correct docs with a description of an API that no longer exists:
+ *
+ *      - guest identity via a `guest_token` httpOnly cookie, replaced by
+ *        order-number lookup through `GET /orders/lookup`
+ *      - `facebookVideoUrl` on a product, replaced by `videoUrl` +
+ *        `videoPlatform`
+ *      - a `BANK_TRANSFER` payment method that is not in `PaymentMethod`
+ *      - the `REFUNDED` order status, replaced by `RETURNED`
+ *
+ * Fixing the path without first closing that gap would arm this script to
+ * destroy the only accurate copy. So the path is left broken on purpose: it is
+ * the thing currently making this file harmless.
+ *
+ * To revive it: bring every description below in line with
+ * `store.postman_collection.json`, change the target to
+ * `join(__dirname, '..')`, regenerate, and confirm `git diff` on the collection
+ * is empty. Until then, edit the JSON directly. If nobody intends to do that,
+ * delete this file rather than leaving a generator that cannot be trusted.
  */
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
@@ -479,7 +512,7 @@ pm.test('includes the new order', () =>
 One order with its items, totals, addresses and \`statusHistory\`.
 
 **Auth:** Bearer token, or the guest cookie for a guest order. Someone else's order is a 404.
-**Order statuses:** \`PENDING\` (awaiting payment) → \`PAID\` → \`FULFILLING\` → \`SHIPPED\` → \`DELIVERED\`; or \`CANCELLED\` / \`REFUNDED\`. A cash-on-delivery order goes from \`PENDING\` straight to \`FULFILLING\`.
+**Order statuses:** \`PENDING\` (awaiting payment) → \`PAID\` → \`FULFILLING\` → \`SHIPPED\` → \`DELIVERED\`; or \`CANCELLED\` (before dispatch) / \`RETURNED\` (after it). A cash-on-delivery order goes from \`PENDING\` straight to \`FULFILLING\`.
 `, {
       auth: true,
       test: `

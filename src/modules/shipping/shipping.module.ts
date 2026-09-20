@@ -6,6 +6,7 @@ import { Shipment, ShipmentSchema } from './schemas/shipment.schema';
 import { ShippingController } from './shipping.controller';
 import {
   ShippingOrderCancelledHandler,
+  ShippingOrderReturnedHandler,
   ShippingOrderConfirmedHandler,
   ShippingOutboxHandler,
 } from './shipping.listener';
@@ -26,13 +27,16 @@ import { ShippingService } from './shipping.service';
     ShippingOutboxHandler,
     ShippingOrderConfirmedHandler,
     ShippingOrderCancelledHandler,
+    ShippingOrderReturnedHandler,
   ],
-  // Contributed to the dispatcher's handler list in AppModule.
+  // Exported for completeness only: the dispatcher finds subscribers through
+  // DiscoveryService over the provider list, not through an import.
   exports: [
     ShippingService,
     ShippingOutboxHandler,
     ShippingOrderConfirmedHandler,
     ShippingOrderCancelledHandler,
+    ShippingOrderReturnedHandler,
   ],
 })
 export class ShippingModule {}

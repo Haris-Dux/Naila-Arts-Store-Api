@@ -12,7 +12,7 @@ import { Money } from '../../common/money';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { ownsRecord } from '../../common/ownership';
-import { OrderStatus, canTransition } from '../orders/enums/order-status.enum';
+import { OrderStatus, canTransition, isTerminal } from '../orders/enums/order-status.enum';
 import { OrdersService } from '../orders/orders.service';
 import { Order, OrderDocument } from '../orders/schemas/order.schema';
 import { OutboxService } from '../outbox/outbox.service';
@@ -182,7 +182,9 @@ export class PaymentsService {
     // that has already happened, and that must still be recorded.
     if (payment.status !== PaymentStatus.CAPTURED) {
       const order = await this.getOrderOrThrow(payment.orderId.toString());
-      if (order.status === OrderStatus.CANCELLED) {
+      // isTerminal, not a list of names: enumerating CANCELLED alone is what
+      // let a payment be captured against an order that had already ended.
+      if (isTerminal(order.status)) {
         throw new InvalidStateTransitionException(
           'Payment',
           payment.status,
@@ -313,12 +315,31 @@ export class PaymentsService {
       throw error;
     }
 
+    /**
+     * Derive the status from the claimed document, which carries the balance
+     * *after* every reservation that has landed — including a concurrent one.
+     *
+     * Deciding from this caller's own share instead let two operators refunding
+     * half each finish in the wrong order and write PARTIALLY_REFUNDED over a
+     * payment whose balance was already zero: a REFUNDED → PARTIALLY_REFUNDED
+     * move the transition table forbids. No money was ever at risk — the $expr
+     * reservation above is what guarantees that — but the record read as though
+     * something was still owed.
+     */
     const next =
       claimed.amountRefunded >= claimed.amount
         ? PaymentStatus.REFUNDED
         : PaymentStatus.PARTIALLY_REFUNDED;
 
     payment = claimed;
+    // Never walk backwards out of REFUNDED, whatever order the callers finish in.
+    if (payment.status === PaymentStatus.REFUNDED && next !== PaymentStatus.REFUNDED) {
+      this.logger.log(
+        `Refund on ${payment.reference} settled while it was already fully refunded; ` +
+          `leaving the status alone`,
+      );
+      return PaymentResponseDto.from(payment);
+    }
     payment.status = next;
     payment.events.push({
       status: next,
@@ -328,16 +349,10 @@ export class PaymentsService {
     });
     await payment.save();
 
-    // A full refund releases the order; a partial one leaves it standing,
-    // because the customer still has goods that were partly paid for.
-    if (next === PaymentStatus.REFUNDED) {
-      await this.transitionOrderSafely(
-        payment.orderId.toString(),
-        OrderStatus.REFUNDED,
-        actor,
-        reason,
-      );
-    }
+    // The order is deliberately untouched. Whether the goods came back is a
+    // separate fact from whether the money did, and only the warehouse knows
+    // it — so returning an order is marked on the order, and refunding is
+    // recorded here. Neither drives the other.
 
     this.logger.log(
       `Refunded ${Money.fromMinor(result.amount, payment.currency).format()} on ${payment.reference}`,
@@ -439,12 +454,8 @@ export class PaymentsService {
           note: `Refunded via ${providerName} webhook`,
         });
         await payment.save();
-        await this.transitionOrderSafely(
-          payment.orderId.toString(),
-          OrderStatus.REFUNDED,
-          null,
-          'Refunded by provider',
-        );
+        // No order transition: see refund(). A gateway telling us the money
+        // went back says nothing about where the goods are.
         break;
 
       case PaymentStatus.FAILED:

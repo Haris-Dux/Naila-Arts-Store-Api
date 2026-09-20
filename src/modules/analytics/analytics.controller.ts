@@ -30,10 +30,11 @@ export class AnalyticsController {
     summary: 'Headline figures for a period, against the preceding equal-length one (admin)',
     description:
       'Revenue is BOOKED revenue: orders placed in the period that have not been cancelled ' +
-      'or refunded. PENDING is included — on a cash-on-delivery store it is where a placed ' +
+      'or returned. PENDING is included — on a cash-on-delivery store it is where a placed ' +
       'order sits until dispatch, and such an order never reaches PAID at all. The statuses ' +
       'counted are echoed back as `countedStatuses`. Figures are as of now rather than ' +
-      'immutable: a later refund reduces the period the order was placed in.',
+      'immutable: a later return reduces the period the order was placed in. Refunding a ' +
+      'payment does not move these figures — only the order coming back does.',
   })
   @ApiResponse({ status: 200, type: AnalyticsSummaryDto })
   @ApiResponse({ status: 400, description: 'Range is backwards, too long, or unparseable' })

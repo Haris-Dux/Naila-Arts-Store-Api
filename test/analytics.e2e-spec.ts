@@ -1,4 +1,6 @@
 import { INestApplication } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { getModelToken } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { randomUUID } from 'node:crypto';
@@ -16,6 +18,7 @@ describe('Analytics (e2e)', () => {
   let orderModel: Model<OrderDocument>;
   let productModel: Model<ProductDocument>;
   let userModel: Model<UserDocument>;
+  let cache: Cache;
 
   const password = 'StrongP@ssw0rd!';
   let adminToken: string;
@@ -36,6 +39,7 @@ describe('Analytics (e2e)', () => {
     orderModel = app.get<Model<OrderDocument>>(getModelToken(Order.name));
     productModel = app.get<Model<ProductDocument>>(getModelToken(Product.name));
     userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
+    cache = app.get<Cache>(CACHE_MANAGER);
   }, 120_000);
 
   afterAll(async () => {
@@ -68,10 +72,7 @@ describe('Analytics (e2e)', () => {
     return res.body.data.id as string;
   };
 
-  const checkout = async (
-    items: { productId: string; quantity: number }[],
-    token?: string,
-  ) => {
+  const checkout = async (items: { productId: string; quantity: number }[], token?: string) => {
     const req = request(app.getHttpServer())
       .post(api('/orders/checkout'))
       .set('Idempotency-Key', randomUUID());
@@ -108,6 +109,10 @@ describe('Analytics (e2e)', () => {
       orderModel.deleteMany({}),
       productModel.deleteMany({}),
       userModel.deleteMany({}),
+      // Analytics answers are cached for a minute against a minute-aligned
+      // window, so without this a figure computed in one test is served to the
+      // next. Wiping Mongo is not enough on its own.
+      cache.clear(),
     ]);
 
     adminToken = (await makeUser('admin@example.com', UserRole.ADMIN)).token;
@@ -157,11 +162,11 @@ describe('Analytics (e2e)', () => {
       expect(res.body.data.orders.current).toBe(1);
     });
 
-    it('drops a refunded order from revenue', async () => {
+    it('drops a returned order from revenue', async () => {
       const productId = await createProduct('Lawn Suit', 5000);
       const orderId = await checkout([{ productId, quantity: 1 }], shopperToken);
       await placeAt(orderId, daysAgo(1));
-      await setStatus(orderId, OrderStatus.REFUNDED);
+      await setStatus(orderId, OrderStatus.RETURNED);
 
       const res = await get('/analytics/summary').expect(200);
       expect(res.body.data.revenue.current.amount).toBe(0);

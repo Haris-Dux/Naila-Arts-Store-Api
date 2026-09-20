@@ -3,12 +3,13 @@ import { OrderStatus } from '../orders/enums/order-status.enum';
 /**
  * Statuses whose money is not booked, because the order was undone.
  *
- * Both are terminal — see ORDER_TRANSITIONS. Nothing else in the state machine
- * means "this sale did not happen".
+ * Both are terminal — see ORDER_TRANSITIONS — and between them they cover both
+ * ways a sale comes undone: cancelled before the parcel left, returned after.
+ * Nothing else in the state machine means "this sale did not happen".
  */
 export const REVERSED_ORDER_STATUSES: readonly OrderStatus[] = [
   OrderStatus.CANCELLED,
-  OrderStatus.REFUNDED,
+  OrderStatus.RETURNED,
 ] as const;
 
 /**
@@ -26,14 +27,13 @@ export const REVERSED_ORDER_STATUSES: readonly OrderStatus[] = [
  * out of revenue silently; this way a new status is counted, loudly, and
  * analytics.constants.spec.ts fails until somebody classifies it.
  *
- * Two known overstatements, neither fixable from the orders collection alone:
+ * One known distortion:
  *
- *  - A PARTIALLY_REFUNDED payment deliberately leaves the order standing
- *    (see PaymentsService), so the order still counts at its full grandTotal.
- *  - There is no `refundedAt`. A refund reduces the revenue of the window the
- *    order was *placed* in, whenever it happens. Every figure this module
- *    returns is as-of-now rather than immutable, which is why each response
- *    carries `generatedAt`.
+ *  - A return reduces the revenue of the window the order was *placed* in,
+ *    not the window it came back in. `Order.returnedAt` records when it
+ *    happened, but no query in this module reads it. Every figure this module returns is
+ *    as-of-now rather than immutable, which is why each response carries
+ *    `generatedAt`.
  */
 export const BOOKED_REVENUE_STATUSES: readonly OrderStatus[] = Object.values(OrderStatus).filter(
   (status) => !REVERSED_ORDER_STATUSES.includes(status),

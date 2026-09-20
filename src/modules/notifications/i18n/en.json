@@ -34,15 +34,15 @@
     "preheader": "Order {{orderNumber}} has been cancelled.",
     "heading": "Your order has been cancelled",
     "intro": "This order will not be fulfilled, and the items have gone back into stock.",
-    "nextSteps": "If you paid for this order, a refund follows separately and we will email you when it is on its way."
+    "nextSteps": "If you paid for this order, we will arrange your refund separately. Reply to this email if anything looks wrong."
   },
-  "orderRefunded": {
-    "subject": "Your refund for order {{orderNumber}} is on its way",
-    "status": "Refund issued",
-    "preheader": "We've refunded order {{orderNumber}}.",
-    "heading": "Your refund is on its way",
-    "intro": "We have refunded this order in full.",
-    "nextSteps": "Refunds usually reach your account within a few working days, depending on your bank."
+  "orderReturned": {
+    "subject": "We've received your return for order {{orderNumber}}",
+    "status": "Order returned",
+    "preheader": "Order {{orderNumber}} has come back to us.",
+    "heading": "Your return has reached us",
+    "intro": "This order has come back to us and is now closed.",
+    "nextSteps": "If you paid for this order, we will arrange your refund separately. Reply to this email if anything looks wrong."
   },
   "orderDelivered": {
     "subject": "Your order {{orderNumber}} has arrived",

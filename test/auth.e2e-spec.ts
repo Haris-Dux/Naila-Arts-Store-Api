@@ -435,6 +435,33 @@ describe('Auth & Users (e2e)', () => {
         .expect(401);
     });
 
+    it('lets only one of two simultaneous refreshes through', async () => {
+      // The consume used to be a read, a check and then a write, with a user
+      // lookup in between. Two requests carrying the same stolen token both saw
+      // it unspent and both issued — two live tokens in one family, and the
+      // reuse branch never fired. Exactly the attack rotation exists to stop.
+      const { refreshToken } = await registerAndLogin();
+
+      const results = await Promise.all([
+        request(app.getHttpServer()).post(api('/auth/refresh')).send({ refreshToken }),
+        request(app.getHttpServer()).post(api('/auth/refresh')).send({ refreshToken }),
+      ]);
+
+      const accepted = results.filter((res) => res.status === 200);
+      const rejected = results.filter((res) => res.status === 401);
+
+      expect(accepted).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      // The loser is treated as reuse, so the winner's brand-new token is dead
+      // too — the family is burned and a real re-login is required.
+      const issued = accepted[0].body.data.refreshToken as string;
+      await request(app.getHttpServer())
+        .post(api('/auth/refresh'))
+        .send({ refreshToken: issued })
+        .expect(401);
+    });
+
     it('revokes a single session on logout', async () => {
       const { accessToken, refreshToken } = await registerAndLogin();
 

@@ -21,7 +21,7 @@ describe('analytics constants', () => {
 
   it('excludes the two reversals', () => {
     expect(BOOKED_REVENUE_STATUSES).not.toContain(OrderStatus.CANCELLED);
-    expect(BOOKED_REVENUE_STATUSES).not.toContain(OrderStatus.REFUNDED);
+    expect(BOOKED_REVENUE_STATUSES).not.toContain(OrderStatus.RETURNED);
   });
 
   it('partitions the enum, so no status is silently unclassified', () => {

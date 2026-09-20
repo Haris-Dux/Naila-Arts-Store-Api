@@ -28,6 +28,10 @@ const ORDER_STATUS_FOR_SHIPMENT: Readonly<Partial<Record<ShipmentStatus, OrderSt
   [ShipmentStatus.PREPARING]: OrderStatus.FULFILLING,
   [ShipmentStatus.IN_TRANSIT]: OrderStatus.SHIPPED,
   [ShipmentStatus.DELIVERED]: OrderStatus.DELIVERED,
+  // The parcel came back, so the order did too — which is what returns its
+  // units to the shelf. Legal from SHIPPED as well as DELIVERED, because a
+  // cash-on-delivery parcel refused at the door never reached the customer.
+  [ShipmentStatus.RETURNED]: OrderStatus.RETURNED,
 };
 
 @Injectable()
@@ -124,7 +128,12 @@ export class ShippingService {
       shipment.status !== ShipmentStatus.PENDING &&
       shipment.status !== ShipmentStatus.PREPARING
     ) {
-      if (shipment.status !== ShipmentStatus.CANCELLED) {
+      // RETURNED is an ordinary ending now that a returned parcel closes its
+      // order, so it is no more remarkable here than CANCELLED.
+      if (
+        shipment.status !== ShipmentStatus.CANCELLED &&
+        shipment.status !== ShipmentStatus.RETURNED
+      ) {
         this.logger.warn(
           `Order ${shipment.orderNumber} was cancelled but its shipment is already ${shipment.status}`,
         );
@@ -135,6 +144,35 @@ export class ShippingService {
     this.applyStatus(shipment, ShipmentStatus.CANCELLED, null, null, 'Order cancelled');
     await shipment.save();
     this.logger.log(`Shipment for ${shipment.orderNumber} cancelled with its order`);
+  }
+
+  /**
+   * Record that the parcel came back, when the order was closed directly.
+   *
+   * The usual direction is the other way — the warehouse marks the shipment
+   * RETURNED and `mirrorToOrder` closes the order. But staff can also move the
+   * order straight to RETURNED from the order screen, which is the recovery
+   * path when the parcel was never tracked properly. Without this the shipment
+   * would sit at DELIVERED forever, disagreeing with its own order.
+   *
+   * Idempotent, and silent when the shipment cannot legally follow: a parcel
+   * that never shipped has nothing to come back, which is not a problem worth
+   * a warning.
+   */
+  async markReturnedForOrder(orderId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(orderId)) return;
+
+    const shipment = await this.shipmentModel
+      .findOne({ orderId: new Types.ObjectId(orderId), ...notDeleted })
+      .exec();
+    if (!shipment) return;
+
+    if (shipment.status === ShipmentStatus.RETURNED) return;
+    if (!canTransitionShipment(shipment.status, ShipmentStatus.RETURNED)) return;
+
+    this.applyStatus(shipment, ShipmentStatus.RETURNED, null, null, 'Order marked returned');
+    await shipment.save();
+    this.logger.log(`Shipment for ${shipment.orderNumber} recorded as returned with its order`);
   }
 
   // ------------------------------------------------------------------- reads
@@ -187,56 +225,110 @@ export class ShippingService {
 
   // ---------------------------------------------------------- state changes
 
-  /** Attach carrier details and move the shipment into transit. */
+  /**
+   * Attach carrier details and move the shipment into transit.
+   *
+   * **The order moves first, and that ordering is the lock.** Dispatch used to
+   * read the order's status, check it was not terminal, and then commit the
+   * shipment in a separate transaction — so a customer cancelling in between
+   * (now legal right up to dispatch) got their stock restored while the parcel
+   * still went out. The units ended up in the courier's van *and* on the shelf,
+   * and the customer received a cancellation notice and a tracking number.
+   *
+   * Moving the order first makes the state machine settle it, with no new
+   * locking:
+   *
+   *   - cancel commits first → `canTransition(CANCELLED, …)` fails, this throws
+   *     409, and the shipment is never touched;
+   *   - this commits first → the order is SHIPPED, and SHIPPED has no CANCELLED
+   *     edge, so the cancel is refused.
+   *
+   * A snapshot read inside a transaction would not have done it: this writes
+   * only the shipment, so there is no conflict on the order document to detect.
+   */
   async dispatch(
     id: string,
     dto: DispatchShipmentDto,
     actor: AuthenticatedUser,
   ): Promise<ShipmentResponseDto> {
-    const shipment = await this.getDocumentOrThrow(id);
+    const existing = await this.getDocumentOrThrow(id);
 
-    // A cancelled or refunded order must not ship. Checked before anything is
-    // saved, so the customer is never told a parcel is on its way.
-    const order = await this.orderModel
-      .findOne({ _id: shipment.orderId, ...notDeleted })
-      .select('status')
-      .exec();
-    if (
-      order &&
-      (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED)
-    ) {
-      throw new InvalidStateTransitionException('Order', order.status, OrderStatus.SHIPPED);
+    // Idempotent: re-dispatching a parcel already in transit returns it
+    // unchanged rather than a permanent 409. Without this a failure anywhere
+    // after the shipment save left no way to finish the job, because the
+    // machine has no IN_TRANSIT → IN_TRANSIT edge.
+    if (existing.status === ShipmentStatus.IN_TRANSIT) {
+      return ShipmentResponseDto.from(existing);
     }
-
-    // PENDING → IN_TRANSIT skips PREPARING, which the machine disallows, so let
-    // dispatching imply it rather than forcing two calls for one real action.
-    //
-    // Each applied step is mirrored onto the order afterwards, in order: the
-    // order machine also has no PAID → SHIPPED edge, so skipping the implied
-    // PREPARING here would leave the order stuck at PAID.
-    const applied: ShipmentStatus[] = [];
-    if (shipment.status === ShipmentStatus.PENDING) {
-      this.applyStatus(shipment, ShipmentStatus.PREPARING, actor, null, 'Preparing for dispatch');
-      applied.push(ShipmentStatus.PREPARING);
-    }
-
-    shipment.carrier = dto.carrier;
-    shipment.trackingNumber = dto.trackingNumber;
-    shipment.trackingUrl = dto.trackingUrl ?? null;
-    shipment.estimatedDeliveryAt = dto.estimatedDeliveryAt
-      ? new Date(dto.estimatedDeliveryAt)
-      : null;
 
     const note = `Dispatched with ${dto.carrier} (${dto.trackingNumber})`;
-    this.applyStatus(shipment, ShipmentStatus.IN_TRANSIT, actor, null, note);
-    applied.push(ShipmentStatus.IN_TRANSIT);
 
-    // The save and the announcement commit together, so a customer whose parcel
-    // is marked dispatched is guaranteed to be told about it.
+    /**
+     * PENDING → IN_TRANSIT skips PREPARING, which the machine disallows, so let
+     * dispatching imply it rather than forcing two calls for one real action.
+     *
+     * The order mirrors each step in turn: the order machine has no
+     * PAID → SHIPPED edge either, so skipping the implied PREPARING would leave
+     * the order stuck at PAID.
+     */
+    const applied: ShipmentStatus[] =
+      existing.status === ShipmentStatus.PENDING
+        ? [ShipmentStatus.PREPARING, ShipmentStatus.IN_TRANSIT]
+        : [ShipmentStatus.IN_TRANSIT];
+
+    // Not mirrorToOrder: that swallows failures so a recorded parcel movement
+    // is never lost. Here the opposite is wanted — if the order cannot move,
+    // nothing should be recorded at all.
+    for (const status of applied) {
+      const orderStatus = ORDER_STATUS_FOR_SHIPMENT[status];
+      if (!orderStatus) continue;
+      await this.ordersService.updateStatus(existing.orderId.toString(), orderStatus, actor, note);
+    }
+
+    let saved!: ShipmentDocument;
+
+    /**
+     * The save and the announcement commit together, so a customer whose parcel
+     * is marked dispatched is guaranteed to be told about it.
+     *
+     * The document is re-read inside the callback: `withTransaction` re-runs
+     * this on a transient conflict, and Mongoose clears a document's modified
+     * paths on a successful save, so retrying a document mutated outside would
+     * write nothing while the outbox row committed.
+     */
     const session = await this.connection.startSession();
     try {
       await session.withTransaction(async () => {
+        const shipment = await this.shipmentModel
+          .findOne({ _id: existing._id, ...notDeleted })
+          .session(session)
+          .exec();
+        if (!shipment) throw new ResourceNotFoundException('Shipment', id);
+        if (shipment.status === ShipmentStatus.IN_TRANSIT) {
+          saved = shipment;
+          return;
+        }
+
+        if (shipment.status === ShipmentStatus.PENDING) {
+          this.applyStatus(
+            shipment,
+            ShipmentStatus.PREPARING,
+            actor,
+            null,
+            'Preparing for dispatch',
+          );
+        }
+
+        shipment.carrier = dto.carrier;
+        shipment.trackingNumber = dto.trackingNumber;
+        shipment.trackingUrl = dto.trackingUrl ?? null;
+        shipment.estimatedDeliveryAt = dto.estimatedDeliveryAt
+          ? new Date(dto.estimatedDeliveryAt)
+          : null;
+
+        this.applyStatus(shipment, ShipmentStatus.IN_TRANSIT, actor, null, note);
         await shipment.save({ session });
+
         await this.outboxService.record(
           {
             aggregateType: 'shipment',
@@ -252,15 +344,14 @@ export class ShippingService {
           },
           session,
         );
+
+        saved = shipment;
       });
     } finally {
       await session.endSession();
     }
 
-    for (const status of applied) {
-      await this.mirrorToOrder(shipment, status, actor, note);
-    }
-    return ShipmentResponseDto.from(shipment);
+    return ShipmentResponseDto.from(saved);
   }
 
   async updateStatus(
@@ -274,6 +365,11 @@ export class ShippingService {
 
     // Idempotent: repeating the current status is a no-op, not an error, because
     // carrier feeds routinely repeat themselves.
+    //
+    // Note this returns before mirrorToOrder, so a mirror that failed on the
+    // first call cannot be repaired by repeating the request — the shipment
+    // already holds the target status. Recovery is to move the order directly,
+    // which staff can do from the order screen.
     if (shipment.status === next) return ShipmentResponseDto.from(shipment);
 
     this.applyStatus(shipment, next, actor, location ?? null, note ?? null);
@@ -316,7 +412,7 @@ export class ShippingService {
   /**
    * Reflect the shipment's new state onto its order.
    *
-   * Best-effort and outside the shipment's transaction: a cancelled or refunded
+   * Best-effort and outside the shipment's transaction: an already-closed
    * order must not stop the warehouse recording that a parcel physically moved.
    */
   private async mirrorToOrder(
@@ -336,13 +432,26 @@ export class ShippingService {
         note ?? `Shipment ${next}`,
       );
     } catch (error) {
-      if (error instanceof InvalidStateTransitionException) {
-        this.logger.warn(
-          `Shipment ${shipment._id.toString()} moved to ${next} but order could not follow: ${error.message}`,
-        );
-      } else {
-        throw error;
-      }
+      /**
+       * Nothing the order does may undo a parcel that physically moved.
+       *
+       * This used to rethrow anything that was not a transition conflict, which
+       * meant a restock failure — a soft-deleted product was enough — surfaced
+       * as a 404 on a shipment that had *already been saved* as RETURNED. Worse,
+       * the retry was useless: `updateStatus` short-circuits once the shipment
+       * holds the target status, so the order stayed stranded with no way back
+       * through this endpoint.
+       *
+       * The shipment record is the one that must not be lost, so every failure
+       * here is logged and swallowed. The order can still be moved by hand from
+       * the order screen, which is now a legal transition staff can see.
+       */
+      const reason = error instanceof Error ? error.message : String(error);
+      const level = error instanceof InvalidStateTransitionException ? 'warn' : 'error';
+      this.logger[level](
+        `Shipment ${shipment._id.toString()} moved to ${next} but order ` +
+          `${shipment.orderNumber} could not follow: ${reason}`,
+      );
     }
   }
 

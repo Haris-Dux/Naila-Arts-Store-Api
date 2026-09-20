@@ -18,6 +18,12 @@ const RECONCILE_INTERVAL_MS = 5 * 60_000;
 /** Products examined per reconciliation batch. */
 const RECONCILE_BATCH = 500;
 
+/** First wait before reopening a failed change stream, doubling each attempt. */
+const STREAM_RETRY_BASE_MS = 1_000;
+
+/** Ceiling on that wait, so a permanently broken stream retries once a minute. */
+const STREAM_RETRY_MAX_MS = 60_000;
+
 /**
  * Keeps `Product.stock` matching the ERP's `suits.quantity`.
  *
@@ -44,7 +50,17 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ErpStockSyncService.name);
   private readonly enabled: boolean;
 
-  private stream?: mongo.ChangeStream;
+  private stream: mongo.ChangeStream | null = null;
+
+  /** Set while a recovery is in flight, so two errors cannot both drive one. */
+  private recovering = false;
+
+  /** Consecutive reopen failures, reset on the first success. Drives the backoff. */
+  private streamFailures = 0;
+
+  /** Serialises change handling: each event waits for the previous to finish. */
+  private applying: Promise<void> = Promise.resolve();
+
   private timer?: NodeJS.Timeout;
   private stopping = false;
 
@@ -113,10 +129,19 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
       },
     );
 
+    // Chained, not fired in parallel. `onChange` reads the matching products
+    // and then writes them; overlapping invocations let a 5 → 3 → 1 sequence
+    // land out of order and leave the mirror on a figure the ERP has already
+    // moved past.
+    // Chained, not fired in parallel. `onChange` reads the matching products
+    // and then writes them; overlapping invocations let a 5 → 3 → 1 sequence
+    // land out of order and leave the mirror on a figure the ERP has moved past.
     stream.on('change', (event: unknown) => {
-      void this.onChange(event).catch((error: unknown) => {
-        this.logger.error(`Failed to apply a suit change: ${asMessage(error)}`);
-      });
+      this.applying = this.applying
+        .then(() => this.onChange(event))
+        .catch((error: unknown) => {
+          this.logger.error(`Failed to apply a suit change: ${asMessage(error)}`);
+        });
     });
 
     stream.on('error', (error: unknown) => {
@@ -124,9 +149,7 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.stream = stream;
-    this.logger.log(
-      `Watching suits for stock changes${checkpoint ? ' (resumed)' : ' (from now)'}`,
-    );
+    this.logger.log(`Watching suits for stock changes${checkpoint ? ' (resumed)' : ' (from now)'}`);
   }
 
   /**
@@ -134,20 +157,59 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
    *
    * Reconcile first, then reopen from now: carrying on without the events in
    * between would leave the mirror wrong with nothing to indicate it.
+   *
+   * Three things keep this from becoming a hot loop, which is what it was:
+   *
+   *  - **Backoff.** Reopening immediately on a permanent error — a standalone
+   *    mongod, where change streams simply do not exist — spun as fast as Mongo
+   *    could answer, with a full catalogue sweep on every pass.
+   *  - **A re-entrancy guard.** Two errors arriving together ran two recoveries
+   *    and left two live cursors, each delivering the same changes again.
+   *  - **The checkpoint is only dropped when it is the problem.** Deleting it on
+   *    every transient blip threw away a resume point that was still good.
    */
   private async onStreamError(error: unknown): Promise<void> {
-    if (this.stopping) return;
+    if (this.stopping || this.recovering) return;
+    this.recovering = true;
 
-    this.logger.warn(`Change stream error, resynchronising: ${asMessage(error)}`);
+    try {
+      this.logger.warn(`Change stream error, resynchronising: ${asMessage(error)}`);
 
-    await this.stream?.close().catch(() => undefined);
-    await this.checkpointModel.deleteOne({ name: STREAM_NAME }).exec();
-    await this.reconcile().catch((reconcileError: unknown) => {
-      this.logger.error(`Reconciliation after stream error failed: ${asMessage(reconcileError)}`);
-    });
-    await this.start().catch((startError: unknown) => {
-      this.logger.error(`Could not reopen the change stream: ${asMessage(startError)}`);
-    });
+      const previous = this.stream;
+      this.stream = null;
+      await previous?.close().catch(() => undefined);
+
+      /**
+       * Always drop the checkpoint and reconcile before reopening.
+       *
+       * Tempting to keep the token on what looks like a transient error, but a
+       * token that cannot be resumed from does not announce itself in the error
+       * message — and retrying with it just fails the same way forever, while
+       * the mirror sits wrong. Discarding it costs one sweep; keeping a bad one
+       * costs the whole sync.
+       */
+      await this.checkpointModel.deleteOne({ name: STREAM_NAME }).exec();
+      await this.reconcile().catch((reconcileError: unknown) => {
+        this.logger.error(`Reconciliation after stream error failed: ${asMessage(reconcileError)}`);
+      });
+
+      const delay = Math.min(STREAM_RETRY_BASE_MS * 2 ** this.streamFailures, STREAM_RETRY_MAX_MS);
+      this.streamFailures += 1;
+      this.logger.warn(`Reopening the change stream in ${Math.round(delay / 1000)}s`);
+      await new Promise((resolve) => setTimeout(resolve, delay).unref());
+
+      if (this.stopping) return;
+
+      await this.start()
+        .then(() => {
+          this.streamFailures = 0;
+        })
+        .catch((startError: unknown) => {
+          this.logger.error(`Could not reopen the change stream: ${asMessage(startError)}`);
+        });
+    } finally {
+      this.recovering = false;
+    }
   }
 
   /** Apply one suit change to the mirror. Exposed so e2e can drive it directly. */
@@ -169,11 +231,7 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
 
     if (change._id) {
       await this.checkpointModel
-        .updateOne(
-          { name: STREAM_NAME },
-          { $set: { token: change._id } },
-          { upsert: true },
-        )
+        .updateOne({ name: STREAM_NAME }, { $set: { token: change._id } }, { upsert: true })
         .exec();
     }
   }
@@ -190,18 +248,27 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
   private async applyStock(suitId: Types.ObjectId, stock: number): Promise<void> {
     const normalised = Math.max(0, Math.trunc(stock));
 
-    const products = await this.productModel
-      .find({ erpId: suitId.toString(), stock: { $ne: normalised }, ...notDeleted })
-      .select('_id')
-      .lean()
+    /**
+     * One statement, not a read followed by a write.
+     *
+     * Selecting the ids and then updating them by `_id` left a gap in which a
+     * checkout could decrement the very row about to be written — and the write
+     * then put the pre-sale figure back, overselling until the next sweep.
+     * Keeping `$ne` in the filter of the update itself preserves the no-op
+     * behaviour and closes the gap.
+     */
+    const result = await this.productModel
+      .updateMany(
+        { erpId: suitId.toString(), stock: { $ne: normalised }, ...notDeleted },
+        { $set: { stock: normalised } },
+      )
       .exec();
 
-    if (products.length === 0) return;
+    if (result.modifiedCount === 0) return;
 
-    const ids = products.map((product) => product._id);
-    await this.productModel.updateMany({ _id: { $in: ids } }, { $set: { stock: normalised } }).exec();
-
-    await this.announce(ids.map((id) => id.toString()));
+    // The listener retires the whole catalogue namespace and ignores the ids,
+    // so naming the suit is enough to say what moved.
+    await this.announce([suitId.toString()]);
   }
 
   /**
@@ -254,9 +321,7 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
 
       for (const product of drifted) {
         const truth = Math.max(0, Math.trunc(stockBySuit.get(product.erpId!)!));
-        await this.productModel
-          .updateOne({ _id: product._id }, { $set: { stock: truth } })
-          .exec();
+        await this.productModel.updateOne({ _id: product._id }, { $set: { stock: truth } }).exec();
         this.logger.warn(
           `Corrected stock drift on product ${product._id.toString()}: ` +
             `${product.stock} -> ${truth} (suit ${product.erpId})`,

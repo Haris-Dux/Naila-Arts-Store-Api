@@ -76,7 +76,7 @@ function zonedParts(
     year: Number(parts.year),
     month: Number(parts.month),
     day: Number(parts.day),
-    weekday: weekdays.indexOf(parts.weekday as string),
+    weekday: weekdays.indexOf(parts.weekday),
   };
 }
 
@@ -87,12 +87,7 @@ function zonedParts(
  * corrected instant. One pass is wrong whenever the guess lands on the far side
  * of a DST boundary from the answer.
  */
-export function zonedStartOfDay(
-  year: number,
-  month: number,
-  day: number,
-  timezone: string,
-): Date {
+export function zonedStartOfDay(year: number, month: number, day: number, timezone: string): Date {
   const naive = Date.UTC(year, month - 1, day);
   const firstGuess = new Date(naive - zoneOffsetMs(timezone, new Date(naive)));
   return new Date(naive - zoneOffsetMs(timezone, firstGuess));
@@ -206,7 +201,27 @@ export function resolveWindow(
   timezone: string,
   now: Date = new Date(),
 ): AnalyticsWindow {
-  const to = input.to ? parseBound(input.to, timezone, true) : now;
+  /**
+   * A defaulted upper bound is rounded down to the minute.
+   *
+   * `now` carries millisecond precision, and the cache key is built from
+   * `to.toISOString()` — so every request with no `to` produced a unique key and
+   * the 60-second TTL protected nothing. Each dashboard widget re-ran its
+   * aggregation on every load, including the new-customer query that scans the
+   * whole booked order set with no index to help it.
+   *
+   * Rounded *up*, not down: rounding down would push the last few seconds of
+   * orders outside the window, so an order placed moments ago would vanish from
+   * "revenue today" until the clock ticked over. Rounding up only reaches
+   * slightly into the future, where there is nothing to find.
+   *
+   * Aligning to the minute matches ANALYTICS_TTL_MS exactly: within one TTL
+   * every caller asks for the same window, so the entry that was stored is the
+   * entry they want.
+   */
+  const to = input.to
+    ? parseBound(input.to, timezone, true)
+    : new Date(Math.ceil(now.getTime() / 60_000) * 60_000);
 
   const from = input.from
     ? parseBound(input.from, timezone, false)
@@ -222,10 +237,10 @@ export function resolveWindow(
   const lengthMs = to.getTime() - from.getTime();
 
   if (lengthMs > MAX_WINDOW_DAYS * MS_PER_DAY) {
-    throw new ValidationFailedException(
-      `A window may span at most ${MAX_WINDOW_DAYS} days`,
-      { requestedDays: Math.ceil(lengthMs / MS_PER_DAY), maxDays: MAX_WINDOW_DAYS },
-    );
+    throw new ValidationFailedException(`A window may span at most ${MAX_WINDOW_DAYS} days`, {
+      requestedDays: Math.ceil(lengthMs / MS_PER_DAY),
+      maxDays: MAX_WINDOW_DAYS,
+    });
   }
 
   const interval = input.interval ?? 'auto';

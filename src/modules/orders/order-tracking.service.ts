@@ -85,6 +85,7 @@ export class OrderTrackingService {
       })),
       placedAt: order.placedAt,
       cancelledAt: order.cancelledAt,
+      returnedAt: order.returnedAt,
     };
   }
 
