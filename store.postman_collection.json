@@ -527,6 +527,45 @@
               }
             }
           ]
+        },
+        {
+          "name": "Look up favourites",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\"{{productId}}\", \"000000000000000000000000\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/products/lookup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products",
+                "lookup"
+              ]
+            },
+            "description": "Turns the product ids a shopper has saved as favourites (in localStorage) back into products — send the saved ids, get back the ones still on sale.\n\n**Auth:** none.\n**Body:** `ids` — up to 100 product ids.\n**Returns:** an array of products, in the order the ids were sent, each at most once. Ids of products that no longer exist, were unpublished, or are not valid ids are simply left out — compare the ids you sent with the ids you got back and remove the missing ones from localStorage."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('only the product that exists', () => pm.expect(pm.response.json().data.map((p) => p.id)).to.eql([pm.collectionVariables.get('productId')]));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },

@@ -701,6 +701,92 @@ describe('Catalog & Inventory (e2e)', () => {
     });
   });
 
+  describe('favourites lookup', () => {
+    const lookup = (ids: unknown, token?: string) => {
+      const req = request(app.getHttpServer()).post(api('/products/lookup'));
+      if (token) req.set('Authorization', `Bearer ${token}`);
+      return req.send({ ids });
+    };
+
+    const idsOf = (res: request.Response) =>
+      res.body.data.map((p: { id: string }) => p.id) as string[];
+
+    it('returns the published products, in the order asked for', async () => {
+      const first = (await createProduct({ name: 'First' }).expect(201)).body.data.id as string;
+      const second = (await createProduct({ name: 'Second' }).expect(201)).body.data.id as string;
+
+      const res = await lookup([second, first]).expect(200);
+
+      expect(idsOf(res)).toEqual([second, first]);
+      expect(res.body.data[0]).toMatchObject({ name: 'Second', isActive: true });
+    });
+
+    it('silently drops unknown, deleted, unpublished and malformed ids', async () => {
+      const live = (await createProduct({ name: 'Live' }).expect(201)).body.data.id as string;
+      const draft = (await createProduct({ name: 'Draft', isActive: false }).expect(201)).body.data
+        .id as string;
+      const deleted = (await createProduct({ name: 'Gone' }).expect(201)).body.data.id as string;
+      await request(app.getHttpServer())
+        .delete(api(`/products/${deleted}`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      const res = await lookup([
+        '507f1f77bcf86cd799439011',
+        draft,
+        live,
+        deleted,
+        'not-an-id',
+      ]).expect(200);
+
+      expect(idsOf(res)).toEqual([live]);
+    });
+
+    it('returns each product once, however often it is asked for', async () => {
+      const id = (await createProduct().expect(201)).body.data.id as string;
+
+      const res = await lookup([id, id, id]).expect(200);
+
+      expect(idsOf(res)).toEqual([id]);
+    });
+
+    it('resolves images, as a listing card does', async () => {
+      const [mediaId] = await uploadImages(1);
+      const id = (await createProduct({ images: [{ mediaId }] }).expect(201)).body.data
+        .id as string;
+
+      const res = await lookup([id]).expect(200);
+
+      expect(res.body.data[0].images).toHaveLength(1);
+      expect(res.body.data[0].images[0]).toMatchObject({ mediaId });
+    });
+
+    it('answers an empty list with an empty list', async () => {
+      const res = await lookup([]).expect(200);
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('never returns an unpublished product, even to staff', async () => {
+      const draft = (await createProduct({ isActive: false }).expect(201)).body.data.id as string;
+
+      const res = await lookup([draft], adminToken).expect(200);
+
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('rejects a body that is not a list of ids', async () => {
+      await request(app.getHttpServer()).post(api('/products/lookup')).send({}).expect(400);
+      await lookup('507f1f77bcf86cd799439011').expect(400);
+      await lookup([42]).expect(400);
+    });
+
+    it('caps how many ids one request may ask for', async () => {
+      const tooMany = Array.from({ length: 101 }, (_, i) => i.toString(16).padStart(24, '0'));
+      await lookup(tooMany).expect(400);
+      await lookup(tooMany.slice(0, 100)).expect(200);
+    });
+  });
+
   describe('authorization', () => {
     it('lets anyone browse but not create', async () => {
       await request(app.getHttpServer()).get(api('/products')).expect(200);

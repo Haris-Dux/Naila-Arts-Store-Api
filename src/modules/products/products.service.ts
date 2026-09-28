@@ -158,6 +158,31 @@ export class ProductsService {
     return new Map(products.map((product) => [product._id.toString(), product]));
   }
 
+  /**
+   * The published products among `ids`, in the order they were asked for.
+   *
+   * What a favourites list replays from localStorage. Unknown, deleted,
+   * unpublished and malformed ids are simply absent from the result — never an
+   * error — so the client learns which to forget by comparing what it sent with
+   * what came back. Published only, whoever asks: this is a storefront view.
+   */
+  async findActiveByIds(ids: string[]): Promise<ProductResponseDto[]> {
+    const unique = [...new Set(ids)];
+    const found = await this.findManyByIds(unique);
+
+    const products = unique.flatMap((id) => {
+      const product = found.get(id);
+      return product?.isActive ? [product] : [];
+    });
+
+    // One media lookup for the whole list, as on a listing page.
+    const images = await this.media.findManyByIds(
+      products.flatMap((p) => p.images.map((image) => image.mediaId.toString())),
+    );
+
+    return products.map((p) => ProductResponseDto.from(p, this.currency, undefined, images));
+  }
+
   async findBySlug(slug: string): Promise<ProductResponseDto> {
     const normalised = slug.toLowerCase();
 

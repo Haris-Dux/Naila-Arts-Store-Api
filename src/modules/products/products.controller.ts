@@ -17,6 +17,7 @@ import { MinRole } from '../auth/decorators/roles.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user';
 import { UserRole } from '../users/enums/user-role.enum';
 import { ListProductsDto } from './dto/list-products.dto';
+import { LookupProductsDto } from './dto/lookup-products.dto';
 import { ProductResponseDto } from './dto/product-response.dto';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { ProductsService } from './products.service';
@@ -49,6 +50,23 @@ export class ProductsController {
     return query.paginate === 'cursor'
       ? this.productsService.feed(query, viewer)
       : this.productsService.list(query, viewer);
+  }
+
+  @Post('lookup')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Resolve a list of product ids to the ones still published',
+    description:
+      'For favourites kept client-side. Returns the active products among `ids`, in the ' +
+      'order given, each id at most once. Unknown, deleted, unpublished and malformed ids ' +
+      'are silently left out — compare the ids sent with the ids returned to learn which ' +
+      'to forget.',
+  })
+  @ApiResponse({ status: 200, type: ProductResponseDto, isArray: true })
+  @ApiResponse({ status: 400, description: '`ids` missing, not an array of strings, or too long' })
+  lookup(@Body() dto: LookupProductsDto): Promise<ProductResponseDto[]> {
+    return this.productsService.findActiveByIds(dto.ids);
   }
 
   @Get('slug/:slug')
