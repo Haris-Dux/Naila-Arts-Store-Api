@@ -69,6 +69,7 @@ abstract class OrderNotificationHandler implements OutboxHandler {
           total: money(order.grandTotal),
           items: order.items.map((item) => ({
             name: item.name,
+            color: item.color,
             size: item.size ? item.size.name : null,
             quantity: item.quantity,
             unitPrice: money(item.unitPrice),

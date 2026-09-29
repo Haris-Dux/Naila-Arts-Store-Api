@@ -47,7 +47,8 @@ export class SuitDesignDto {
 }
 
 export class SuitColorDto {
-  @ApiProperty({ description: "The suit's _id — becomes the product's erpId" }) suitId!: string;
+  @ApiProperty({ description: "The suit's _id — becomes a product colour's erpId" })
+  suitId!: string;
   @ApiPropertyOptional({ type: String, nullable: true, example: 'Red' }) color!: string | null;
   @ApiProperty({ description: 'Units available' }) stock!: number;
 }

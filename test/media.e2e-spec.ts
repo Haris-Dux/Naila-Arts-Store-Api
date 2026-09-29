@@ -12,7 +12,7 @@ import { Media, MediaDocument } from '../src/modules/media/schemas/media.schema'
 import { Product, ProductDocument } from '../src/modules/products/schemas/product.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 /**
  * Uploads, and the reference from a product to what was uploaded.
@@ -121,11 +121,26 @@ describe('Media (e2e)', () => {
     return res.body.data.map((m: { id: string }) => m.id);
   };
 
-  const makeProduct = (body: Record<string, unknown> = {}) =>
-    request(app.getHttpServer())
-      .post(api('/products'))
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Lawn Suit', price: 4999, stock: 10, categoryId, ...body });
+  /**
+   * A product in one colour, showing `images`, sold unstitched.
+   *
+   * Returns just `expect`, like the supertest request it wraps: the colour's
+   * suit has to exist before the request is sent.
+   */
+  const makeProduct = ({ images, ...body }: Record<string, unknown> = {}) => ({
+    expect: async (status: number) =>
+      request(app.getHttpServer())
+        .post(api('/products'))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Lawn Suit',
+          categoryId,
+          offers: [{ sizing: 'UNSTITCHED', price: 4999 }],
+          variants: [{ erpId: await createSuit(app, 10), color: 'Red', images }],
+          ...body,
+        })
+        .expect(status),
+  });
 
   // ----------------------------------------------------------------- upload
 
@@ -277,19 +292,17 @@ describe('Media (e2e)', () => {
       }).expect(201);
 
       // Ordered by position, not by the order they were sent.
-      expect(created.body.data.images.map((i: { alt: string }) => i.alt)).toEqual([
-        'Front',
-        'Back',
-      ]);
-      expect(created.body.data.images[0]).toMatchObject({
+      const images = created.body.data.variants[0].images;
+      expect(images.map((i: { alt: string }) => i.alt)).toEqual(['Front', 'Back']);
+      expect(images[0]).toMatchObject({
         mediaId: a,
         width: 1200,
         height: 1600,
       });
-      expect(created.body.data.images[0].url).toMatch(/^\/media\//);
+      expect(images[0].url).toMatch(/^\/media\//);
     });
 
-    it('caps a product at eight images', async () => {
+    it('caps a colour at eight images', async () => {
       // Eight fit in a single upload request, which takes up to ten files.
       const ids = await upload(8);
       await makeProduct({ images: ids.map((mediaId) => ({ mediaId })) }).expect(201);
@@ -324,21 +337,26 @@ describe('Media (e2e)', () => {
       await makeProduct({ images: [{ mediaId: a, alt: 'Front' }] }).expect(201);
 
       const listed = await request(app.getHttpServer()).get(api('/products')).expect(200);
-      expect(listed.body.data.items[0].images[0]).toMatchObject({ mediaId: a, width: 1200 });
+      expect(listed.body.data.items[0].variants[0].images[0]).toMatchObject({
+        mediaId: a,
+        width: 1200,
+      });
     });
 
-    it('replaces the image list on update', async () => {
+    it("replaces a colour's image list on update", async () => {
       const [a, b] = await upload(2);
       const created = await makeProduct({ images: [{ mediaId: a }] }).expect(201);
+      const { erpId, color } = created.body.data.variants[0];
 
       const updated = await request(app.getHttpServer())
         .patch(api(`/products/${created.body.data.id as string}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ images: [{ mediaId: b, alt: 'Only one now' }] })
+        .send({ variants: [{ erpId, color, images: [{ mediaId: b, alt: 'Only one now' }] }] })
         .expect(200);
 
-      expect(updated.body.data.images).toHaveLength(1);
-      expect(updated.body.data.images[0].mediaId).toBe(b);
+      const images = updated.body.data.variants[0].images;
+      expect(images).toHaveLength(1);
+      expect(images[0].mediaId).toBe(b);
     });
   });
 

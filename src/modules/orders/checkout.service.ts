@@ -7,6 +7,7 @@ import { ValidationFailedException } from '../../common/exceptions/domain.except
 import { Money, sumMoney } from '../../common/money';
 import { ProductSizing } from '../products/enums/product-sizing.enum';
 import { ProductsService } from '../products/products.service';
+import { ProductDocument, ProductOffer } from '../products/schemas/product.schema';
 import { SizesService } from '../sizes/sizes.service';
 import { InventoryService, StockLine } from '../inventory/inventory.service';
 import { OutboxService } from '../outbox/outbox.service';
@@ -17,9 +18,10 @@ import { OrderResponseDto } from './dto/order-response.dto';
 import { OrderStatus } from './enums/order-status.enum';
 import { Order, OrderDocument, OrderItem, OrderItemSize } from './schemas/order.schema';
 
-/** One basket line after duplicate folding, keyed by product *and* size. */
+/** One basket line after duplicate folding, keyed by product, colour *and* size. */
 interface CheckoutLine {
   productId: string;
+  variantId: string;
   sizeId: string | null;
   quantity: number;
 }
@@ -144,7 +146,7 @@ export class CheckoutService {
     const items: OrderItem[] = [];
     const stockLines: StockLine[] = [];
 
-    for (const { productId, sizeId, quantity } of lines.values()) {
+    for (const { productId, variantId, sizeId, quantity } of lines.values()) {
       const product = products.get(productId);
 
       if (!product || !product.isActive) {
@@ -154,15 +156,26 @@ export class CheckoutService {
         );
       }
 
-      const size = await this.resolveSize(product, sizeId);
+      const variant = product.variants.find((candidate) => candidate._id.toString() === variantId);
+      if (!variant) {
+        throw new ValidationFailedException(`"${product.name}" is not available in that colour`, {
+          productId,
+          variantId,
+        });
+      }
 
-      // The *effective* price: a promotion running now is what the customer is
-      // charged, and the order records that rather than the list price.
-      const unitPrice = Money.fromMinor(product.effectivePrice, this.currency);
+      const { offer, size } = await this.resolveOffer(product, sizeId);
+
+      // The *effective* price of the form bought: a promotion running now is
+      // what the customer is charged, and the order records that rather than
+      // the list price.
+      const unitPrice = Money.fromMinor(offer.effectivePrice, this.currency);
       items.push({
         productId: product._id,
         // Snapshot: the order must still read correctly after the catalogue moves on.
         name: product.name,
+        variantId: variant._id,
+        color: variant.color,
         sku: product.sku,
         size,
         unitPrice: unitPrice.amount,
@@ -170,7 +183,7 @@ export class CheckoutService {
         lineTotal: unitPrice.times(quantity).amount,
       });
 
-      stockLines.push({ productId, quantity });
+      stockLines.push({ productId, variantId, quantity });
     }
 
     // Atomic, guarded, and inside the transaction — a shortfall on any line
@@ -260,9 +273,10 @@ export class CheckoutService {
     const merged = new Map<string, CheckoutLine>();
 
     for (const item of items) {
-      // Keyed by product *and* size: the same shirt in M and in L is two lines a
-      // picker has to see separately, not a duplicate to fold.
-      const key = `${item.productId}:${item.sizeId ?? ''}`;
+      // Keyed by product, colour *and* size: the same suit in red and in blue,
+      // or in M and in L, is two lines a picker has to see separately, not a
+      // duplicate to fold.
+      const key = `${item.productId}:${item.variantId}:${item.sizeId ?? ''}`;
       const existing = merged.get(key);
       const total = (existing?.quantity ?? 0) + item.quantity;
 
@@ -275,35 +289,47 @@ export class CheckoutService {
         );
       }
 
-      merged.set(key, { productId: item.productId, sizeId: item.sizeId ?? null, quantity: total });
+      merged.set(key, {
+        productId: item.productId,
+        variantId: item.variantId,
+        sizeId: item.sizeId ?? null,
+        quantity: total,
+      });
     }
 
     return merged;
   }
 
   /**
-   * Resolve the size a line was ordered in, and refuse a mismatch.
+   * The form a line was ordered in — and so its price — and the size, if any.
    *
-   * A sized product without a size cannot be picked; an unstitched one with a
-   * size describes a choice the storefront never offered. Both are rejected
+   * A size makes the line stitched; no size makes it unstitched. Each is refused
+   * when the product is not sold that way, and a size must be one it offers:
+   * a stitched line without a size cannot be cut, and a size on a product sold
+   * only unstitched describes a choice the storefront never offered. Rejected
    * rather than normalised, because either means the client and the catalogue
    * disagree about what is being sold.
    */
-  private async resolveSize(
-    product: { _id: Types.ObjectId; name: string; sizing: ProductSizing; sizes: Types.ObjectId[] },
+  private async resolveOffer(
+    product: ProductDocument,
     sizeId: string | null,
-  ): Promise<OrderItemSize | null> {
-    if (product.sizing === ProductSizing.UNSTITCHED) {
-      if (sizeId) {
-        throw new ValidationFailedException(`"${product.name}" is unstitched and has no sizes`, {
+  ): Promise<{ offer: ProductOffer; size: OrderItemSize | null }> {
+    const offerFor = (sizing: ProductSizing) =>
+      product.offers.find((offer) => offer.sizing === sizing);
+
+    if (!sizeId) {
+      const offer = offerFor(ProductSizing.UNSTITCHED);
+      if (!offer) {
+        throw new ValidationFailedException(`Choose a size for "${product.name}"`, {
           productId: product._id.toString(),
         });
       }
-      return null;
+      return { offer, size: null };
     }
 
-    if (!sizeId) {
-      throw new ValidationFailedException(`Choose a size for "${product.name}"`, {
+    const offer = offerFor(ProductSizing.SIZED);
+    if (!offer) {
+      throw new ValidationFailedException(`"${product.name}" is sold unstitched and has no sizes`, {
         productId: product._id.toString(),
       });
     }
@@ -316,7 +342,7 @@ export class CheckoutService {
     }
 
     const size = await this.sizesService.resolveOne(sizeId);
-    return { sizeId: size.id, name: size.name, code: size.code };
+    return { offer, size: { sizeId: size.id, name: size.name, code: size.code } };
   }
 
   /**

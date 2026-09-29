@@ -21,12 +21,20 @@ const order = {
   items: [
     {
       name: 'Embroidered Lawn Suit',
+      color: 'Maroon',
       size: 'Medium',
       quantity: 2,
       unitPrice: 'PKR 4,500',
       lineTotal: 'PKR 9,000',
     },
-    { name: 'Chiffon Dupatta', size: null, quantity: 1, unitPrice: 'PKR 0', lineTotal: 'PKR 0' },
+    {
+      name: 'Chiffon Dupatta',
+      color: 'Ivory',
+      size: null,
+      quantity: 1,
+      unitPrice: 'PKR 0',
+      lineTotal: 'PKR 0',
+    },
   ],
 };
 
@@ -95,16 +103,19 @@ describe('TemplateService', () => {
     expect(email.html).toContain('10 minutes');
   });
 
-  it('lists each item with its size, quantity and prices', () => {
+  it('lists each item with its colour, size, quantity and prices', () => {
     const email = templates.render('orderPlaced', SAMPLES.orderPlaced, 'Ayesha');
 
     expect(email.html).toContain('Embroidered Lawn Suit');
+    expect(email.html).toContain('Maroon');
     expect(email.html).toContain('Medium');
     expect(email.html).toContain('PKR 4,500');
     expect(email.html).toContain('PKR 9,000');
     expect(email.text).toContain(
-      '- Embroidered Lawn Suit (Size: Medium): 2 × PKR 4,500 = PKR 9,000',
+      '- Embroidered Lawn Suit (Colour: Maroon, Size: Medium): 2 × PKR 4,500 = PKR 9,000',
     );
+    // Unstitched: a colour, and no size.
+    expect(email.text).toContain('- Chiffon Dupatta (Colour: Ivory): 1 × PKR 0 = PKR 0');
   });
 
   it('links the tracking page from the dispatch email', () => {

@@ -19,7 +19,7 @@ import { ShipmentStatus } from '../src/modules/shipping/enums/shipment-status.en
 import { Shipment, ShipmentDocument } from '../src/modules/shipping/schemas/shipment.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 describe('Guest checkout, two roles, and COD (e2e)', () => {
   let ctx: TestContext;
@@ -38,6 +38,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
   const password = 'StrongP@ssw0rd!';
   let adminToken: string;
   let productId: string;
+  let variantId: string;
 
   const address = {
     fullName: 'Jane Doe',
@@ -108,9 +109,15 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
     const product = await request(app.getHttpServer())
       .post(api('/products'))
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Wireless Mouse', price: 2499, stock: 20, categoryId })
+      .send({
+        name: 'Wireless Mouse',
+        categoryId,
+        offers: [{ sizing: 'UNSTITCHED', price: 2499 }],
+        variants: [{ erpId: await createSuit(app, 20), color: 'Red' }],
+      })
       .expect(201);
     productId = product.body.data.id as string;
+    variantId = product.body.data.variants[0].id as string;
     sendSpy.mockClear();
   });
 
@@ -192,7 +199,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
-        .send({ items: [{ productId, quantity }], ...guestBody(body) });
+        .send({ items: [{ productId, variantId, quantity }], ...guestBody(body) });
 
     const lookup = (orderNumber: string) =>
       request(app.getHttpServer()).get(api('/orders/lookup')).query({ orderNumber });
@@ -228,7 +235,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
-        .send({ shippingAddress: address, items: [{ productId, quantity: 1 }] });
+        .send({ shippingAddress: address, items: [{ productId, variantId, quantity: 1 }] });
 
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/email address and a name/i);
@@ -238,7 +245,10 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
-        .send({ items: [{ productId, quantity: 1 }], ...guestBody({ email: 'not-an-email' }) })
+        .send({
+          items: [{ productId, variantId, quantity: 1 }],
+          ...guestBody({ email: 'not-an-email' }),
+        })
         .expect(400);
     });
 
@@ -367,14 +377,14 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', key)
-        .send({ items: [{ productId, quantity: 1 }], ...guestBody() })
+        .send({ items: [{ productId, variantId, quantity: 1 }], ...guestBody() })
         .expect(201);
 
       const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', key)
         .send({
-          items: [{ productId, quantity: 1 }],
+          items: [{ productId, variantId, quantity: 1 }],
           ...guestBody({ email: 'second@example.com' }),
         })
         .expect(201);
@@ -385,7 +395,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
 
     it('replays a guest key rather than ordering twice', async () => {
       const key = randomUUID();
-      const body = { items: [{ productId, quantity: 2 }], ...guestBody() };
+      const body = { items: [{ productId, variantId, quantity: 2 }], ...guestBody() };
 
       const first = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
@@ -407,7 +417,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       // Two concurrent requests, neither carrying any identity, so the body is
       // all there is to scope them by.
       const key = randomUUID();
-      const body = { items: [{ productId, quantity: 2 }], ...guestBody() };
+      const body = { items: [{ productId, variantId, quantity: 2 }], ...guestBody() };
 
       const fire = () =>
         request(app.getHttpServer())
@@ -442,7 +452,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
         .set('Authorization', `Bearer ${customer.token}`)
         .set('Idempotency-Key', randomUUID())
         .send({
-          items: [{ productId, quantity: 1 }],
+          items: [{ productId, variantId, quantity: 1 }],
           ...guestBody({ email: 'attacker@example.com', name: 'Someone Else' }),
         })
         .expect(201);
@@ -462,7 +472,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Idempotency-Key', randomUUID())
-        .send({ items: [{ productId, quantity: 2 }], ...guestBody() })
+        .send({ items: [{ productId, variantId, quantity: 2 }], ...guestBody() })
         .expect(201);
       return {
         id: res.body.data.id as string,
@@ -611,7 +621,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
         .post(api('/orders/checkout'))
         .set('Authorization', `Bearer ${customer.token}`)
         .set('Idempotency-Key', randomUUID())
-        .send({ shippingAddress: address, items: [{ productId, quantity: 1 }] })
+        .send({ shippingAddress: address, items: [{ productId, variantId, quantity: 1 }] })
         .expect(201);
 
       await pay(theirs.body.data.id as string).expect(404);

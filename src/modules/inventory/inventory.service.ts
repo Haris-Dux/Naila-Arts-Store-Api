@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
@@ -13,16 +13,19 @@ import { Product, ProductDocument } from '../products/schemas/product.schema';
 
 export interface StockLine {
   productId: string;
+  /** The colour sold — each colour is its own ERP suit, with its own stock. */
+  variantId: string;
   quantity: number;
 }
 
 /**
- * The only component permitted to change `Product.stock`.
+ * The only component permitted to change stock.
  *
- * Everything here is a *conditional* update — the guard on the quantity lives in
- * the query filter, so the check and the write are one atomic operation inside
- * MongoDB. There is no read-modify-write window for a concurrent order to slip
- * through.
+ * Every colour of a product is an ERP suit, and the suit's `quantity` is the
+ * stock. Everything here is a *conditional* update — the guard on the quantity
+ * lives in the query filter, so the check and the write are one atomic
+ * operation inside MongoDB. There is no read-modify-write window for a
+ * concurrent order to slip through.
  *
  * The old `decreaseStock` did:
  *
@@ -36,8 +39,6 @@ export interface StockLine {
  */
 @Injectable()
 export class InventoryService {
-  private readonly logger = new Logger(InventoryService.name);
-
   constructor(
     @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
     @InjectModel(Suit.name) private readonly suitModel: Model<SuitDocument>,
@@ -67,74 +68,54 @@ export class InventoryService {
   }
 
   /**
-   * Take `quantity` units off the shelf, or fail.
+   * Take `quantity` units of one colour off the shelf, or fail.
    *
-   * `stock: { $gte: quantity }` in the filter is the whole safety property: the
-   * document only matches while it still holds enough, so the update either
-   * applies in full or does not apply at all.
+   * The ERP owns the number, so the guard and the write are on the colour's
+   * suit: `quantity: { $gte: quantity }` in the filter is the whole safety
+   * property — the suit only matches while it still holds enough, so the sale
+   * either takes the units or takes none. (The ERP's field is itself called
+   * `quantity`, hence `quantity: -quantity`.)
    */
-  async decrease(productId: string, quantity: number, session?: ClientSession): Promise<void> {
+  async decrease(
+    productId: string,
+    variantId: string,
+    quantity: number,
+    session?: ClientSession,
+  ): Promise<void> {
     this.assertPositive(quantity);
 
-    const link = await this.stockOwner(productId, session);
+    const erpId = await this.suitOf(productId, variantId, session);
 
-    if (link.erpId) {
-      // The ERP owns this number. Guard and write it there, with exactly the
-      // same atomicity — the filter only matches while the suit still holds
-      // enough, so the sale either takes the units or takes none. (The ERP's
-      // field is itself called `quantity`, hence `quantity: -quantity`.)
-      const claimed = await this.suitModel
-        .updateOne(
-          { _id: link.erpId, quantity: { $gte: quantity } },
-          { $inc: { quantity: -quantity } },
-          { session },
-        )
-        .exec();
-
-      if (claimed.matchedCount !== 1) {
-        await this.explainSuitFailure(productId, link.erpId, quantity, session);
-      }
-
-      // Mirror, in the same transaction. The change stream will deliver this
-      // same value moments later as an idempotent no-op; doing it here means the
-      // customer who just bought does not see a stale figure in between.
-      await this.productModel
-        .updateOne(
-          { _id: this.toObjectId(productId) },
-          { $inc: { stock: -quantity, sellCount: quantity } },
-          { session },
-        )
-        .exec();
-
-      if (!session) await this.invalidateCache([productId]);
-      return;
-    }
-
-    const result = await this.productModel
+    const claimed = await this.suitModel
       .updateOne(
-        {
-          _id: this.toObjectId(productId),
-          deletedAt: null,
-          stock: { $gte: quantity },
-        },
-        { $inc: { stock: -quantity, sellCount: quantity } },
+        { _id: erpId, quantity: { $gte: quantity } },
+        { $inc: { quantity: -quantity } },
         { session },
       )
       .exec();
 
-    if (result.matchedCount === 1) {
-      // Outside a transaction there is no commit to wait for, so the cached view
-      // can be retired immediately. Inside one, the caller does it post-commit.
-      if (!session) await this.invalidateCache([productId]);
-      return;
+    if (claimed.matchedCount !== 1) {
+      await this.explainSuitFailure(productId, erpId, quantity, session);
     }
 
-    // Only on the failure path do we pay for a second read, to say *why*.
-    await this.explainFailure(productId, quantity, session);
+    // Mirror, in the same transaction — the colour's figure and the product's
+    // total move together, so they cannot disagree. The change stream will
+    // deliver this same value moments later as an idempotent no-op; doing it
+    // here means the customer who just bought does not see a stale figure in
+    // between.
+    await this.productModel
+      .updateOne(
+        { _id: this.toObjectId(productId), 'variants._id': this.toObjectId(variantId) },
+        { $inc: { 'variants.$.stock': -quantity, stock: -quantity, sellCount: quantity } },
+        { session },
+      )
+      .exec();
+
+    if (!session) await this.invalidateCache([productId]);
   }
 
   /**
-   * Decrease several products together.
+   * Decrease several colours together.
    *
    * Must be called inside a transaction (Phase 5's checkout supplies one), so a
    * shortfall on the third line rolls back the first two. Without a session this
@@ -143,9 +124,11 @@ export class InventoryService {
   async decreaseMany(lines: StockLine[], session: ClientSession): Promise<void> {
     // Deterministic order: two concurrent checkouts touching the same products
     // take locks in the same sequence, which avoids a write conflict deadlock.
-    const ordered = [...lines].sort((a, b) => a.productId.localeCompare(b.productId));
+    const ordered = [...lines].sort(
+      (a, b) => a.productId.localeCompare(b.productId) || a.variantId.localeCompare(b.variantId),
+    );
     for (const line of ordered) {
-      await this.decrease(line.productId, line.quantity, session);
+      await this.decrease(line.productId, line.variantId, line.quantity, session);
     }
   }
 
@@ -157,28 +140,27 @@ export class InventoryService {
    * leave `sellCount` alone — they belong to the ERP, which books them when a
    * branch receives the goods.
    */
-  async restore(productId: string, quantity: number, session?: ClientSession): Promise<void> {
+  async restore(
+    productId: string,
+    variantId: string,
+    quantity: number,
+    session?: ClientSession,
+  ): Promise<void> {
     this.assertPositive(quantity);
 
-    const link = await this.stockOwner(productId, session);
+    const erpId = await this.suitOf(productId, variantId, session);
 
-    if (link.erpId) {
-      // Units go back to the ERP's count, because that is where they were taken
-      // from. No guard needed: putting stock back cannot go negative.
-      await this.suitModel
-        .updateOne({ _id: link.erpId }, { $inc: { quantity } }, { session })
-        .exec();
-    }
+    // Units go back to the ERP's count, because that is where they were taken
+    // from. No guard needed: putting stock back cannot go negative.
+    await this.suitModel.updateOne({ _id: erpId }, { $inc: { quantity } }, { session }).exec();
 
-    const result = await this.productModel
+    await this.productModel
       .updateOne(
-        { _id: this.toObjectId(productId), deletedAt: null },
-        { $inc: { stock: quantity, sellCount: -quantity } },
+        { _id: this.toObjectId(productId), 'variants._id': this.toObjectId(variantId) },
+        { $inc: { 'variants.$.stock': quantity, stock: quantity, sellCount: -quantity } },
         { session },
       )
       .exec();
-
-    if (result.matchedCount === 0) throw new ResourceNotFoundException('Product', productId);
 
     // sellCount floors at zero: a return must not drive the popularity counter
     // negative if history is incomplete.
@@ -191,13 +173,6 @@ export class InventoryService {
       .exec();
 
     if (!session) await this.invalidateCache([productId]);
-  }
-
-  /** Units coming back from a cancelled or returned order. */
-  async restoreMany(lines: StockLine[], session?: ClientSession): Promise<void> {
-    for (const line of lines) {
-      await this.restore(line.productId, line.quantity, session);
-    }
   }
 
   /** Current on-hand quantities, for a stock check before a slow checkout step. */
@@ -222,42 +197,43 @@ export class InventoryService {
     return new Types.ObjectId(id);
   }
 
-  /** Distinguish "no such product" from "not enough stock" after a failed update. */
   /**
-   * Which collection owns this product's stock.
+   * The ERP suit that holds one colour's stock.
    *
-   * A product built on an ERP suit defers to `suits.quantity`; one that is not
-   * keeps its own count. Reading the link rather than assuming it lets the
-   * catalogue be attached to the ERP a product at a time.
+   * A product that has been deleted, or a colour since removed from it, is
+   * "not found" — which is what lets an order whose colour is gone still be
+   * closed (see `OrdersService.restoreStock`).
    */
-  private async stockOwner(
+  private async suitOf(
     productId: string,
+    variantId: string,
     session?: ClientSession,
-  ): Promise<{ erpId: Types.ObjectId | null }> {
+  ): Promise<Types.ObjectId> {
     const product = await this.productModel
       .findOne({ _id: this.toObjectId(productId), deletedAt: null })
-      .select('erpId')
+      .select('variants._id variants.erpId')
       .session(session ?? null)
       .lean()
       .exec();
 
     if (!product) throw new ResourceNotFoundException('Product', productId);
 
-    if (!product.erpId) return { erpId: null };
+    const variant = product.variants.find((candidate) => candidate._id.toString() === variantId);
+    if (!variant) throw new ResourceNotFoundException('Product colour', variantId);
 
-    if (!Types.ObjectId.isValid(product.erpId)) {
-      // A link that cannot resolve is worse than no link: it would silently fall
-      // back to the mirror and start selling from a number nobody maintains.
+    if (!Types.ObjectId.isValid(variant.erpId)) {
+      // A link that cannot resolve is worse than no sale: there is no stock
+      // figure behind it to guard.
       throw new ValidationFailedException(
-        'Product is linked to an ERP record whose id is not valid',
-        { productId, erpId: product.erpId },
+        'Product colour is linked to an ERP record whose id is not valid',
+        { productId, variantId, erpId: variant.erpId },
       );
     }
 
-    return { erpId: new Types.ObjectId(product.erpId) };
+    return new Types.ObjectId(variant.erpId);
   }
 
-  /** Say why an ERP-backed decrement did not apply. */
+  /** Say why a decrement did not apply. */
   private async explainSuitFailure(
     productId: string,
     erpId: Types.ObjectId,
@@ -272,31 +248,11 @@ export class InventoryService {
       .exec();
 
     if (!suit) {
-      // The product points at a suit that is gone. Refusing the sale is the only
+      // The colour points at a suit that is gone. Refusing the sale is the only
       // safe answer — there is no stock figure to trust.
       throw new ResourceNotFoundException('ERP record for product', productId);
     }
 
     throw new InsufficientStockException(productId, quantity, suit.quantity ?? 0);
-  }
-
-  private async explainFailure(
-    productId: string,
-    quantity: number,
-    session?: ClientSession,
-  ): Promise<never> {
-    const product = await this.productModel
-      .findOne({ _id: this.toObjectId(productId), deletedAt: null })
-      .select('_id stock')
-      .session(session ?? null)
-      .lean()
-      .exec();
-
-    if (!product) throw new ResourceNotFoundException('Product', productId);
-
-    this.logger.warn(
-      `Rejected stock decrease for ${productId}: wanted ${quantity}, had ${product.stock}`,
-    );
-    throw new InsufficientStockException(productId, quantity, product.stock);
   }
 }

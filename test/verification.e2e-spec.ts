@@ -12,7 +12,7 @@ import { ManualPaymentProvider } from '../src/modules/payments/provider/manual-p
 import { Payment, PaymentDocument } from '../src/modules/payments/schemas/payment.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 /**
  * Regression tests for defects found during the pre-review verification sweep.
@@ -155,7 +155,12 @@ describe('Verification regressions (e2e)', () => {
       const product = await request(app.getHttpServer())
         .post(api('/products'))
         .set('Authorization', `Bearer ${admin.token}`)
-        .send({ name: 'Widget', price: 2499, stock: 10, categoryId })
+        .send({
+          name: 'Widget',
+          categoryId,
+          offers: [{ sizing: 'UNSTITCHED', price: 2499 }],
+          variants: [{ erpId: await createSuit(app, 10), color: 'Red' }],
+        })
         .expect(201);
 
       const order = await request(app.getHttpServer())
@@ -164,7 +169,13 @@ describe('Verification regressions (e2e)', () => {
         .set('Idempotency-Key', randomUUID())
         .send({
           shippingAddress: address,
-          items: [{ productId: product.body.data.id, quantity: 2 }],
+          items: [
+            {
+              productId: product.body.data.id,
+              variantId: product.body.data.variants[0].id,
+              quantity: 2,
+            },
+          ],
         })
         .expect(201);
 

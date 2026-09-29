@@ -23,7 +23,7 @@ import { Shipment, ShipmentDocument } from '../src/modules/shipping/schemas/ship
 import { NotificationStatus } from '../src/modules/notifications/schemas/notification-log.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 describe('Notifications (e2e)', () => {
   let ctx: TestContext;
@@ -45,6 +45,7 @@ describe('Notifications (e2e)', () => {
   let shopperToken: string;
   let adminToken: string;
   let productId: string;
+  let variantId: string;
 
   const address = {
     fullName: 'Jane Doe',
@@ -96,7 +97,7 @@ describe('Notifications (e2e)', () => {
       .post(api('/orders/checkout'))
       .set('Authorization', `Bearer ${shopperToken}`)
       .set('Idempotency-Key', randomUUID())
-      .send({ shippingAddress: address, items: [{ productId, quantity: 2 }] })
+      .send({ shippingAddress: address, items: [{ productId, variantId, quantity: 2 }] })
       .expect(201);
 
     return res.body.data.id as string;
@@ -142,9 +143,15 @@ describe('Notifications (e2e)', () => {
     const product = await request(app.getHttpServer())
       .post(api('/products'))
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Wireless Mouse', price: 2499, stock: 10, categoryId })
+      .send({
+        name: 'Wireless Mouse',
+        categoryId,
+        offers: [{ sizing: 'UNSTITCHED', price: 2499 }],
+        variants: [{ erpId: await createSuit(app, 10), color: 'Red' }],
+      })
       .expect(201);
     productId = product.body.data.id as string;
+    variantId = product.body.data.variants[0].id as string;
     sendSpy.mockClear();
   });
 
@@ -307,7 +314,7 @@ describe('Notifications (e2e)', () => {
           email: 'guest@example.com',
           name: 'Guest Shopper',
           shippingAddress: address,
-          items: [{ productId, quantity: 1 }],
+          items: [{ productId, variantId, quantity: 1 }],
         })
         .expect(201);
 
@@ -467,7 +474,15 @@ describe('Notifications (e2e)', () => {
         order: {
           orderNumber: 'ORD-1',
           total: '$49.98',
-          items: [{ name: 'Mouse', quantity: 2, unitPrice: '$24.99', lineTotal: '$49.98' }],
+          items: [
+            {
+              name: 'Mouse',
+              color: 'Red',
+              quantity: 2,
+              unitPrice: '$24.99',
+              lineTotal: '$49.98',
+            },
+          ],
         },
       };
 
@@ -502,6 +517,7 @@ describe('Notifications (e2e)', () => {
             items: [
               {
                 name: '<script>alert(1)</script>',
+                color: 'Red',
                 quantity: 1,
                 unitPrice: '$0.00',
                 lineTotal: '$0.00',

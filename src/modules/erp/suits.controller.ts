@@ -12,8 +12,8 @@ import {
 import { SuitsService } from './suits.service';
 
 /**
- * The ERP's suits, as the dashboard needs them to build a product on one:
- * pick a design, then one of its colours — whose id becomes `erpId`.
+ * The ERP's suits, as the dashboard needs them to build a product on them:
+ * pick a design, then its colours — each one's id becomes a colour's `erpId`.
  */
 @ApiTags('erp')
 @ApiBearerAuth()

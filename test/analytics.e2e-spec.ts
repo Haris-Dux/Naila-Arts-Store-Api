@@ -10,7 +10,7 @@ import { Order, OrderDocument } from '../src/modules/orders/schemas/order.schema
 import { Product, ProductDocument } from '../src/modules/products/schemas/product.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 describe('Analytics (e2e)', () => {
   let ctx: TestContext;
@@ -63,12 +63,22 @@ describe('Analytics (e2e)', () => {
     return { id, token: login.body.data.tokens.accessToken as string };
   };
 
-  const createProduct = async (name: string, price: number, stock = 100) => {
+  /** The colour each product was created in, which is what checkout sells. */
+  const colours = new Map<string, string>();
+
+  /** A product in one colour — a suit of `stock` units — sold unstitched at `price`. */
+  const createProduct = async (name: string, price: number, stock = 100, category = categoryId) => {
     const res = await request(app.getHttpServer())
       .post(api('/products'))
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name, price, stock, categoryId })
+      .send({
+        name,
+        categoryId: category,
+        offers: [{ sizing: 'UNSTITCHED', price }],
+        variants: [{ erpId: await createSuit(app, stock), color: 'Red' }],
+      })
       .expect(201);
+    colours.set(res.body.data.id as string, res.body.data.variants[0].id as string);
     return res.body.data.id as string;
   };
 
@@ -82,7 +92,8 @@ describe('Analytics (e2e)', () => {
     const res = await req
       .send({
         shippingAddress: address,
-        items,
+        // Each in the colour its product was created in.
+        items: items.map((item) => ({ ...item, variantId: colours.get(item.productId) })),
         // A guest names themselves on the order; a signed-in shopper's contact
         // details are read from their account and cannot be sent.
         ...(token ? {} : { email: 'guest@example.com', name: 'Guest Buyer' }),
@@ -400,12 +411,7 @@ describe('Analytics (e2e)', () => {
       const other = await createCategory(app, adminToken, 'Formals');
 
       const inFirst = await createProduct('Lawn Suit', 1000);
-      const inSecondRes = await request(app.getHttpServer())
-        .post(api('/products'))
-        .set('Authorization', `Bearer ${adminToken}`)
-        .send({ name: 'Blazer', price: 4000, stock: 10, categoryId: other })
-        .expect(201);
-      const inSecond = inSecondRes.body.data.id as string;
+      const inSecond = await createProduct('Blazer', 4000, 10, other);
 
       const orderId = await checkout(
         [

@@ -227,14 +227,14 @@ export class OrdersService {
    * Put the order's units back, and report which products moved so the caller
    * can retire their cached figures after the commit.
    *
-   * Tolerant of a line whose product no longer exists, and that is the whole
-   * point. `InventoryService` resolves stock through the product document and
-   * throws when it has been soft-deleted — so a single retired product used to
-   * make its orders impossible to close: cancelling 404'd, and a returned
-   * parcel left the order stranded mid-transition with the shipment already
-   * saved. An order must always be able to reach an ending. The units that
-   * still have somewhere to go are restored; the rest are logged loudly enough
-   * for someone to reconcile by hand.
+   * Tolerant of a line whose product or colour no longer exists, and that is
+   * the whole point. `InventoryService` resolves stock through the product
+   * document and throws when it has been soft-deleted, or the colour removed —
+   * so a single retired product used to make its orders impossible to close:
+   * cancelling 404'd, and a returned parcel left the order stranded
+   * mid-transition with the shipment already saved. An order must always be
+   * able to reach an ending. The units that still have somewhere to go are
+   * restored; the rest are logged loudly enough for someone to reconcile by hand.
    */
   private async restoreStock(order: OrderDocument, session: ClientSession): Promise<string[]> {
     // The flag is the guard against restocking twice — a second cancellation, or
@@ -247,7 +247,12 @@ export class OrdersService {
     for (const item of order.items) {
       const productId = item.productId.toString();
       try {
-        await this.inventoryService.restore(productId, item.quantity, session);
+        await this.inventoryService.restore(
+          productId,
+          item.variantId.toString(),
+          item.quantity,
+          session,
+        );
         restored.push(productId);
       } catch (error) {
         // Only a product that can no longer be resolved is survivable. Anything
@@ -255,15 +260,15 @@ export class OrdersService {
         // transaction, or the order would close claiming a restock that never
         // happened.
         if (!(error instanceof ResourceNotFoundException)) throw error;
-        skipped.push(productId);
+        skipped.push(`${productId} (${item.color})`);
       }
     }
 
     if (skipped.length > 0) {
       this.logger.warn(
         `Order ${order.orderNumber} closed without restocking ${skipped.length} line(s): ` +
-          `product(s) ${skipped.join(', ')} no longer exist. Adjust stock by hand if those ` +
-          `units came back.`,
+          `product colour(s) ${skipped.join(', ')} no longer exist. Adjust stock by hand if ` +
+          `those units came back.`,
       );
     }
 

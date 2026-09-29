@@ -279,7 +279,7 @@ export class MediaService {
    */
   private async usage(media: MediaDocument): Promise<{ products: number; sections: number }> {
     const [products, sections] = await Promise.all([
-      this.productModel.countDocuments({ 'images.mediaId': media._id, ...notDeleted }),
+      this.productModel.countDocuments({ 'variants.images.mediaId': media._id, ...notDeleted }),
       this.sectionModel.countDocuments({
         'data.items.url': { $regex: `${media.hash}\\.webp$`, $options: 'i' },
         ...notDeleted,

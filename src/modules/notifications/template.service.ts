@@ -27,6 +27,7 @@ export interface RenderedEmail {
 
 interface OrderLine {
   name: string;
+  color: string;
   size?: string | null;
   quantity: number;
   unitPrice: string;
@@ -205,7 +206,8 @@ export class TemplateService implements OnModuleInit {
         '',
         ...order.items.map(
           (item) =>
-            `- ${item.name}${item.size ? ` (${common.size}: ${item.size})` : ''}: ` +
+            `- ${item.name} (${common.color}: ${item.color}` +
+            `${item.size ? `, ${common.size}: ${item.size}` : ''}): ` +
             `${item.quantity} × ${item.unitPrice} = ${item.lineTotal}`,
         ),
         '',

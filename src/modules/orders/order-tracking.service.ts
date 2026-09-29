@@ -58,6 +58,7 @@ export class OrderTrackingService {
       items: order.items.map((item) => ({
         productId: item.productId.toString(),
         name: item.name,
+        color: item.color,
         size: item.size ? item.size.name : null,
         quantity: item.quantity,
         lineTotal: money(item.lineTotal),

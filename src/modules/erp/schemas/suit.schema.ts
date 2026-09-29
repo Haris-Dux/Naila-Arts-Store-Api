@@ -6,10 +6,10 @@ export type SuitDocument = HydratedDocument<Suit>;
 /**
  * A window onto the ERP's own `suits` collection — not a definition of it.
  *
- * The store shares one database with the ERP, and a store product is built on
- * top of a suit: `Product.erpId` holds this document's `_id`. The ERP owns these
- * records; branch workers move `quantity` by booking sale and return bills that
- * the store never sees.
+ * The store shares one database with the ERP, and each colour of a store
+ * product is a suit: `Product.variants[].erpId` holds this document's `_id`. The
+ * ERP owns these records; branch workers move `quantity` by booking sale and
+ * return bills that the store never sees.
  *
  * A real suit document, as the ERP writes it (one per design × category ×
  * colour):
@@ -37,7 +37,8 @@ export class Suit {
 
   /**
    * On-hand units, company-wide — the ERP's name for stock. The source of truth
-   * for any product linked to this suit; `Product.stock` is only a mirror of it.
+   * for the product colour that is this suit; the colour's `stock` is only a
+   * mirror of it.
    */
   @Prop({ type: Number, default: 0 })
   quantity!: number;

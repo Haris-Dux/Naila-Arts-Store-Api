@@ -66,8 +66,9 @@ which this machine runs.
 
 ## Conventions
 
-**Uploaded images are referenced by id, never by URL.** `Product.images[]` holds
-a `mediaId` into the `media` collection; the response resolves it to a URL plus
+**Uploaded images are referenced by id, never by URL.** Each colour's
+`Product.variants[].images[]` holds a `mediaId` into the `media` collection —
+up to eight per colour; the response resolves it to a URL plus
 the dimensions. That makes two things checkable that a URL string cannot: a
 product is refused if it names an image that does not exist, and deleting an
 image is refused while a product still uses it.
@@ -112,20 +113,30 @@ page served the old placement until its TTL ran out. Emit *after* the commit:
 retiring a view before the write is visible lets a concurrent read repopulate it
 from the pre-commit state, which is worse than not invalidating at all.
 
-**A product is `SIZED` or `UNSTITCHED`, and that is not a size.** Unstitched is a
-garment form, so it lives on the product rather than as a row in the size list —
-otherwise it would sit in the size picker beside S/M/L, show up in a filter that
-means "will this fit me", and vanish the day an administrator tidies the size
-list. `sizing` is inferred from `sizes` when the client does not state it, so the
-two can never disagree. Note there is no per-size stock: a size is a choice the
-customer records, and `stock` stays one count per product.
+**A product is sold `SIZED` (stitched), `UNSTITCHED`, or both — and neither is a
+size.** Unstitched is a garment form, so it lives on the product rather than as a
+row in the size list — otherwise it would sit in the size picker beside S/M/L,
+show up in a filter that means "will this fit me", and vanish the day an
+administrator tidies the size list. Each form sold is one entry in
+`Product.offers`; `sizes` is non-empty exactly when a `SIZED` offer is, so the two
+can never disagree. An order line is stitched when it carries a size and
+unstitched when it does not. There is no per-size stock: a size is a choice the
+customer records, cut from the colour's one stock.
 
-**`price` is the regular price; `promotionalPrice` is the offer.** Ending a
+**Each offer has a regular `price` and an optional `promotionalPrice`.** Ending a
 promotion is nulling one field, not remembering what the price used to be. There
-is no schedule — the merchant sets it and clears it. `effectivePrice` is
-denormalised on every write and is what every sort and price filter runs on,
-because sorting on `price` while a promotion is running orders the storefront by
-a number nobody is being charged. Checkout charges `effectivePrice`.
+is no schedule — the merchant sets it and clears it. Each offer's
+`effectivePrice` is what checkout charges for that form. The product's own
+`effectivePrice` is the lowest of them — the "from" price — denormalised on every
+write, and it is what every sort and price filter runs on, because sorting on a
+list price while a promotion is running orders the storefront by a number nobody
+is being charged.
+
+**A product comes in colours, and each colour is an ERP suit.** `Product.variants[]`
+holds one entry per colour: its name, its suit (`erpId`), a mirror of the suit's
+stock, and its own photographs. A basket line names the colour by its `id`, and
+the order records it by value. On an edit a colour is matched by its suit, so it
+keeps its id and stock while its name and photographs change.
 
 **`sellCount` moves only when something is actually sold.** A cancellation or a
 return brings it back down — those units never left. A supplier delivery does
@@ -211,10 +222,13 @@ and the storefront has no blank state to handle. Order within a section is array
 order: the whole region is one document replaced whole, so it needs none of the
 explicit `order` field that separate documents do.
 
-**Only `InventoryService` writes `Product.stock`**, and only through a conditional
-update (`stock: { $gte: qty }` in the filter) so the check and the write are one
-atomic operation. `UpdateProductDto` has no `stock` key, so a catalogue edit
-cannot clobber a concurrent sale.
+**Stock is the ERP's, and only `InventoryService` moves it for a sale or a
+return** — on the colour's suit, through a conditional update (`quantity: { $gte:
+qty }` in the filter) so the check and the write are one atomic operation, then
+on the colour's mirror and the product's total in the same transaction.
+`ErpStockSyncService` brings the ERP's own movements across. No DTO has a stock
+key, and a catalogue edit runs in a transaction, so it cannot clobber a
+concurrent sale.
 
 **Any catalogue write calls `CatalogCacheService.invalidate()`.** Individual
 products are dropped by key; list pages are namespaced by a version counter that
@@ -436,11 +450,11 @@ cash-on-delivery order is the design working.
       carrier dispatch and tracking, plus the outbox dispatcher
 - [x] **Phase 8** — Notifications: file-based templates with i18n, BullMQ delivery
       with retry and a dead-letter set, and a send log that prevents duplicates
-- [x] **Phase 9** — ERP seam. The store shares a database with the ERP: a product
-      is built on an ERP `suits` document via `Product.erpId`, and `suits.quantity`
-      is the source of truth. Checkout decrements it directly; a change stream
-      plus a reconciliation sweep keep `Product.stock` mirroring it. Products
-      without an `erpId` keep their own stock.
+- [x] **Phase 9** — ERP seam. The store shares a database with the ERP: each
+      colour of a product is an ERP `suits` document via
+      `Product.variants[].erpId`, and `suits.quantity` is the source of truth.
+      Checkout decrements it directly; a change stream plus a reconciliation
+      sweep keep each colour's `stock`, and the product's total, mirroring it.
 - [x] **Phase 10** — Ops and tests: production image, single compose stack, CI,
       state-machine unit tests, and admin queue/outbox visibility
 - [x] **Phase 11** — Cutover: the nine legacy services removed, Postman collection

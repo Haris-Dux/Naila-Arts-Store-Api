@@ -18,7 +18,7 @@ import { ShipmentStatus } from '../src/modules/shipping/enums/shipment-status.en
 import { Shipment, ShipmentDocument } from '../src/modules/shipping/schemas/shipment.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 const WEBHOOK_SECRET = 'test-payment-webhook-secret-long-enough';
 
@@ -38,6 +38,7 @@ describe('Shipping & Outbox (e2e)', () => {
   let shopperToken: string;
   let adminToken: string;
   let productId: string;
+  let variantId: string;
 
   const address = {
     fullName: 'Jane Doe',
@@ -86,7 +87,7 @@ describe('Shipping & Outbox (e2e)', () => {
       .post(api('/orders/checkout'))
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', randomUUID())
-      .send({ shippingAddress: address, items: [{ productId, quantity: 2 }] })
+      .send({ shippingAddress: address, items: [{ productId, variantId, quantity: 2 }] })
       .expect(201);
 
     return res.body.data.id as string;
@@ -133,9 +134,15 @@ describe('Shipping & Outbox (e2e)', () => {
     const product = await request(app.getHttpServer())
       .post(api('/products'))
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Wireless Mouse', price: 2499, stock: 10, categoryId })
+      .send({
+        name: 'Wireless Mouse',
+        categoryId,
+        offers: [{ sizing: 'UNSTITCHED', price: 2499 }],
+        variants: [{ erpId: await createSuit(app, 10), color: 'Red' }],
+      })
       .expect(201);
     productId = product.body.data.id as string;
+    variantId = product.body.data.variants[0].id as string;
   });
 
   // ------------------------------------------------------------------- B6

@@ -11,9 +11,9 @@ import { SuitsService } from './suits.service';
 /**
  * The seam between the store and the ERP it shares a database with.
  *
- * Two jobs: keep `Product.stock` matching the ERP's `suits.quantity`, which is the
- * source of truth for any product built on a suit; and let the dashboard look
- * suits up so a product can be built on one.
+ * Two jobs: keep each product colour's stock matching the ERP's
+ * `suits.quantity`, which is the source of truth for it; and let the dashboard
+ * look suits up so a product's colours can be built on them.
  *
  * Registers the Product model rather than importing ProductsModule — the same
  * call CategoriesModule makes: it needs the collection, not the service, and

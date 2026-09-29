@@ -6,7 +6,7 @@ import { Category, CategoryDocument } from '../src/modules/categories/schemas/ca
 import { Product, ProductDocument } from '../src/modules/products/schemas/product.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createTestApp } from './setup-app';
+import { TestContext, api, createSuit, createTestApp } from './setup-app';
 
 /**
  * The category tree: two levels, ordered for display, and the split placement a
@@ -92,11 +92,25 @@ describe('Category tree (e2e)', () => {
     return created.body.data.id as string;
   };
 
-  const postProduct = (body: Record<string, unknown>) =>
-    request(app.getHttpServer())
-      .post(api('/products'))
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Wireless Mouse', price: 2499, stock: 10, ...body });
+  /**
+   * A product in one colour, sold unstitched, filed wherever `body` says.
+   *
+   * Returns just `expect`, like the supertest request it wraps: the colour's
+   * suit has to exist before the request is sent.
+   */
+  const postProduct = (body: Record<string, unknown>) => ({
+    expect: async (status: number) =>
+      request(app.getHttpServer())
+        .post(api('/products'))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Wireless Mouse',
+          offers: [{ sizing: 'UNSTITCHED', price: 2499 }],
+          variants: [{ erpId: await createSuit(app, 10), color: 'Red' }],
+          ...body,
+        })
+        .expect(status),
+  });
 
   const makeProduct = async (body: Record<string, unknown>): Promise<string> => {
     const created = await postProduct(body).expect(201);
@@ -344,7 +358,7 @@ describe('Category tree (e2e)', () => {
 
       const res = await request(app.getHttpServer()).get(api('/categories')).expect(200);
       const byId = new Map(
-        (res.body.data as { id: string; order: number }[]).map((c) => [c.id, c.order])
+        (res.body.data as { id: string; order: number }[]).map((c) => [c.id, c.order]),
       );
 
       expect(byId.get(parent)).toBe(0);
@@ -457,7 +471,9 @@ describe('Category tree (e2e)', () => {
       const child = await makeCategory({ name: 'Lawn', parentId: parent });
 
       const before = await tree().expect(200);
-      expect(before.body.data.find((c: { id: string }) => c.id === parent).children).toHaveLength(1);
+      expect(before.body.data.find((c: { id: string }) => c.id === parent).children).toHaveLength(
+        1,
+      );
 
       await patchCategory(child, { parentId: other }).expect(200);
 

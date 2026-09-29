@@ -7,7 +7,10 @@ import { Address, OrderDocument } from '../schemas/order.schema';
 export class OrderItemResponseDto {
   @ApiProperty() productId!: string;
   @ApiProperty() name!: string;
+  @ApiProperty() variantId!: string;
+  @ApiProperty() color!: string;
   @ApiPropertyOptional({ type: String, nullable: true }) sku!: string | null;
+  /** Null when the line was sold unstitched. */
   @ApiPropertyOptional({ type: Object, nullable: true }) size!: {
     sizeId: string;
     name: string;
@@ -67,6 +70,8 @@ export class OrderResponseDto {
       items: order.items.map((item) => ({
         productId: item.productId.toString(),
         name: item.name,
+        variantId: item.variantId.toString(),
+        color: item.color,
         sku: item.sku,
         size: item.size
           ? {

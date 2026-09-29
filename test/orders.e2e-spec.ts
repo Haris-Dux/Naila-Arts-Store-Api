@@ -1,8 +1,9 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
+import { Suit, SuitDocument } from '../src/modules/erp/schemas/suit.schema';
 import { Product, ProductDocument } from '../src/modules/products/schemas/product.schema';
 import { OrderStatus } from '../src/modules/orders/enums/order-status.enum';
 import { IdempotencyKey } from '../src/modules/orders/schemas/idempotency-key.schema';
@@ -10,7 +11,7 @@ import { Order, OrderDocument } from '../src/modules/orders/schemas/order.schema
 import { OutboxMessage, OutboxDocument } from '../src/modules/outbox/schemas/outbox.schema';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 describe('Orders & Checkout (e2e)', () => {
   let ctx: TestContext;
@@ -67,13 +68,46 @@ describe('Orders & Checkout (e2e)', () => {
     return { id, token: login.body.data.tokens.accessToken as string };
   };
 
-  const createProduct = async (overrides: Record<string, unknown> = {}) => {
+  /** The colour each product was created in, so a basket line can name it. */
+  const colours = new Map<string, string>();
+
+  /** A product in one colour — a fresh suit of `stock` units — sold unstitched at `price`. */
+  const createProduct = async ({
+    price = 2499,
+    stock = 10,
+    ...overrides
+  }: Record<string, unknown> = {}) => {
     const res = await request(app.getHttpServer())
       .post(api('/products'))
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Wireless Mouse', price: 2499, stock: 10, categoryId, ...overrides })
+      .send({
+        name: 'Wireless Mouse',
+        categoryId,
+        offers: [{ sizing: 'UNSTITCHED', price }],
+        variants: [{ erpId: await createSuit(app, stock as number), color: 'Red' }],
+        ...overrides,
+      })
       .expect(201);
+    colours.set(res.body.data.id as string, res.body.data.variants[0].id as string);
     return res.body.data.id as string;
+  };
+
+  /** A basket line: the product, in the colour it was created in. */
+  const line = (productId: string, quantity: unknown) => ({
+    productId,
+    variantId: colours.get(productId),
+    quantity,
+  });
+
+  /** A branch sells the last units of a product's colour, in the ERP. */
+  const sellOutInErp = async (productId: string) => {
+    const product = await productModel.findById(productId).lean().exec();
+    await app
+      .get<Model<SuitDocument>>(getModelToken(Suit.name))
+      .collection.updateOne(
+        { _id: new Types.ObjectId(product!.variants[0].erpId) },
+        { $set: { quantity: 0 } },
+      );
   };
 
   /**
@@ -81,10 +115,10 @@ describe('Orders & Checkout (e2e)', () => {
    * sends it at checkout. `addLine` is what a storefront "add" click amounts to
    * now: it touches no server state at all.
    */
-  const baskets = new Map<string, { productId: string; quantity: number }[]>();
+  const baskets = new Map<string, ReturnType<typeof line>[]>();
 
   const addLine = (token: string, productId: string, quantity: number) => {
-    baskets.set(token, [...(baskets.get(token) ?? []), { productId, quantity }]);
+    baskets.set(token, [...(baskets.get(token) ?? []), line(productId, quantity)]);
   };
 
   const checkout = (
@@ -100,6 +134,7 @@ describe('Orders & Checkout (e2e)', () => {
 
   beforeEach(async () => {
     baskets.clear();
+    colours.clear();
     await Promise.all([
       orderModel.deleteMany({}),
       productModel.deleteMany({}),
@@ -128,7 +163,7 @@ describe('Orders & Checkout (e2e)', () => {
       const res = await checkout(shopperToken, {
         totalPrice: 1,
         grandTotal: 1,
-        items: [{ productId, quantity: 2, unitPrice: 1, price: 1 }],
+        items: [{ ...line(productId, 2), unitPrice: 1, price: 1 }],
       });
 
       expect(res.status).toBe(400);
@@ -141,7 +176,7 @@ describe('Orders & Checkout (e2e)', () => {
       await request(app.getHttpServer())
         .patch(api(`/products/${productId}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ price: 1999 })
+        .send({ offers: [{ sizing: 'UNSTITCHED', price: 1999 }] })
         .expect(200);
 
       const res = await checkout(shopperToken).expect(201);
@@ -165,17 +200,18 @@ describe('Orders & Checkout (e2e)', () => {
   });
 
   describe('the basket arrives from the browser', () => {
-    it('accepts only a product id and a quantity per line', async () => {
+    it('accepts only what was chosen, and how many, per line', async () => {
       // The whole surface the client controls. Anything that could influence
       // what is charged is an unknown key, and `forbidNonWhitelisted` rejects it
       // rather than ignoring it — a silent strip would look like it worked.
-      for (const line of [
-        { productId, quantity: 1, unitPrice: 1 },
-        { productId, quantity: 1, price: 1 },
-        { productId, quantity: 1, lineTotal: 1 },
-        { productId, quantity: 1, name: 'Free stuff' },
+      for (const item of [
+        { ...line(productId, 1), unitPrice: 1 },
+        { ...line(productId, 1), price: 1 },
+        { ...line(productId, 1), lineTotal: 1 },
+        { ...line(productId, 1), name: 'Free stuff' },
+        { ...line(productId, 1), color: 'Free' },
       ]) {
-        await checkout(shopperToken, { items: [line] }).expect(400);
+        await checkout(shopperToken, { items: [item] }).expect(400);
       }
 
       expect(await orderModel.countDocuments({})).toBe(0);
@@ -185,10 +221,7 @@ describe('Orders & Checkout (e2e)', () => {
       // Two tabs, or a UI that appends rather than increments. An order with
       // the same product on two lines reads as a bug to whoever opens it.
       const res = await checkout(shopperToken, {
-        items: [
-          { productId, quantity: 2 },
-          { productId, quantity: 3 },
-        ],
+        items: [line(productId, 2), line(productId, 3)],
       }).expect(201);
 
       expect(res.body.data.items).toHaveLength(1);
@@ -200,17 +233,14 @@ describe('Orders & Checkout (e2e)', () => {
     it('applies the per-line cap to the folded total', async () => {
       // Otherwise splitting one line into two would be a way around it.
       await checkout(shopperToken, {
-        items: [
-          { productId, quantity: 600 },
-          { productId, quantity: 600 },
-        ],
+        items: [line(productId, 600), line(productId, 600)],
       }).expect(400);
-      await checkout(shopperToken, { items: [{ productId, quantity: 1000 }] }).expect(400);
+      await checkout(shopperToken, { items: [line(productId, 1000)] }).expect(400);
     });
 
     it('rejects a nonsensical quantity', async () => {
       for (const quantity of [0, -1, 1.5, '2']) {
-        await checkout(shopperToken, { items: [{ productId, quantity }] }).expect(400);
+        await checkout(shopperToken, { items: [line(productId, quantity)] }).expect(400);
       }
     });
 
@@ -218,13 +248,19 @@ describe('Orders & Checkout (e2e)', () => {
       await checkout(shopperToken, { items: [] }).expect(400);
       await checkout(shopperToken, { items: 'everything' }).expect(400);
       await checkout(shopperToken, {
-        items: Array.from({ length: 101 }, () => ({ productId, quantity: 1 })),
+        items: Array.from({ length: 101 }, () => line(productId, 1)),
       }).expect(400);
     });
 
     it('rejects a product that does not exist', async () => {
       const res = await checkout(shopperToken, {
-        items: [{ productId: '0123456789abcdef01234567', quantity: 1 }],
+        items: [
+          {
+            productId: '0123456789abcdef01234567',
+            variantId: '0123456789abcdef01234568',
+            quantity: 1,
+          },
+        ],
       });
 
       expect(res.status).toBe(400);
@@ -236,10 +272,7 @@ describe('Orders & Checkout (e2e)', () => {
       const second = await createProduct({ name: 'Keyboard', price: 7990, stock: 5 });
 
       const res = await checkout(shopperToken, {
-        items: [
-          { productId, quantity: 2 },
-          { productId: second, quantity: 1 },
-        ],
+        items: [line(productId, 2), line(second, 1)],
       }).expect(201);
 
       expect(res.body.data.subtotal.amount).toBe(2499 * 2 + 7990);
@@ -285,7 +318,7 @@ describe('Orders & Checkout (e2e)', () => {
       addLine(shopperToken, scarce, 1);
 
       // Someone else buys the last scarce unit first.
-      await productModel.updateOne({ _id: scarce }, { $set: { stock: 0 } });
+      await sellOutInErp(scarce);
 
       const res = await checkout(shopperToken);
       expect(res.status).toBe(409);
@@ -392,7 +425,7 @@ describe('Orders & Checkout (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post(api('/orders/checkout'))
         .set('Authorization', `Bearer ${shopperToken}`)
-        .send({ shippingAddress: address, items: [{ productId, quantity: 1 }] });
+        .send({ shippingAddress: address, items: [line(productId, 1)] });
 
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/Idempotency-Key/i);
@@ -451,7 +484,7 @@ describe('Orders & Checkout (e2e)', () => {
       await checkout(shopperToken, {}, key).expect(409);
 
       // Same key now works, rather than being locked out for 24 hours.
-      baskets.set(shopperToken, [{ productId, quantity: 1 }]);
+      baskets.set(shopperToken, [line(productId, 1)]);
       await checkout(shopperToken, {}, key).expect(201);
     });
 
@@ -484,7 +517,7 @@ describe('Orders & Checkout (e2e)', () => {
 
     it('writes no message when checkout fails', async () => {
       addLine(shopperToken, productId, 2);
-      await productModel.updateOne({ _id: productId }, { $set: { stock: 0 } });
+      await sellOutInErp(productId);
 
       await checkout(shopperToken).expect(409);
 
@@ -615,12 +648,7 @@ describe('Orders & Checkout (e2e)', () => {
     });
 
     it('restores the lines it still can when only one product was deleted', async () => {
-      const second = await request(app.getHttpServer())
-        .post(api('/products'))
-        .set('Authorization', `Bearer ${adminToken}`)
-        .send({ name: 'Second Piece', price: 1500, stock: 10, categoryId })
-        .expect(201);
-      const secondId = second.body.data.id as string;
+      const secondId = await createProduct({ name: 'Second Piece', price: 1500 });
 
       addLine(shopperToken, productId, 3);
       addLine(shopperToken, secondId, 2);
@@ -827,14 +855,19 @@ describe('Orders & Checkout (e2e)', () => {
   });
 
   describe('order records', () => {
-    it('snapshots the name and price, so later catalogue edits do not rewrite history', async () => {
+    it('snapshots the name, colour and price, so later catalogue edits do not rewrite history', async () => {
       addLine(shopperToken, productId, 2);
       const order = await checkout(shopperToken).expect(201);
+      const stored = await productModel.findById(productId).lean().exec();
 
       await request(app.getHttpServer())
         .patch(api(`/products/${productId}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ name: 'Renamed Product', price: 9999 })
+        .send({
+          name: 'Renamed Product',
+          offers: [{ sizing: 'UNSTITCHED', price: 9999 }],
+          variants: [{ erpId: stored!.variants[0].erpId, color: 'Crimson' }],
+        })
         .expect(200);
 
       const res = await request(app.getHttpServer())
@@ -844,6 +877,8 @@ describe('Orders & Checkout (e2e)', () => {
 
       // Unlike the live catalogue, an order records what was charged.
       expect(res.body.data.items[0].name).toBe('Wireless Mouse');
+      expect(res.body.data.items[0].color).toBe('Red');
+      expect(res.body.data.items[0].variantId).toBe(colours.get(productId));
       expect(res.body.data.items[0].unitPrice.amount).toBe(2499);
     });
 

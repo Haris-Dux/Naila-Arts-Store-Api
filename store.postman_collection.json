@@ -180,7 +180,7 @@
     },
     {
       "name": "2. Catalogue",
-      "description": "Product listing, search, filters and product pages. All public — no token needed.\n\nA product's `effectivePrice` is what the customer pays. When `isOnPromotion` is true, show `price` struck through next to it.",
+      "description": "Product listing, search, filters and product pages. All public — no token needed.\n\nA product is sold stitched, unstitched, or both — one entry in `offers` each, `SIZED` (stitched to one of the product's `sizes`) or `UNSTITCHED`. Each offer has its own `price`; its `effectivePrice` is what the customer pays in that form, and when its `isOnPromotion` is true, show `price` struck through next to it. The product's own `effectivePrice` is the lowest of them — the \"from\" price for a listing.\n\nIt comes in one or more colours, listed in `variants`, each with its own `images`, `stock` and `inStock`. A basket line names the colour by its `id`.",
       "item": [
         {
           "name": "Browse products",
@@ -214,7 +214,7 @@
                 }
               ]
             },
-            "description": "A page of published products — a category or \"all products\" page with numbered pages.\n\n**Auth:** none.\n**Query (all optional):**\n- `page` — from 1. `limit` — 1–100, default 20.\n- `sort` — `createdAt` (newest), `effectivePrice`, `name`, `sellCount` (best sellers), `rating.average`; `relevance` together with `search`.\n- `order` — `asc` or `desc` (default `desc`).\n\n**Returns:** `items` (products) and `meta` with `total`, `page`, `limit`, `pages`, `hasNext`, `hasPrevious`."
+            "description": "A page of published products — a category or \"all products\" page with numbered pages.\n\n**Auth:** none.\n**Query (all optional):**\n- `page` — from 1. `limit` — 1–100, default 20.\n- `sort` — `createdAt` (newest), `effectivePrice` (the lowest price), `name`, `sellCount` (best sellers), `rating.average`; `relevance` together with `search`.\n- `order` — `asc` or `desc` (default `desc`).\n\n**Returns:** `items` (products) and `meta` with `total`, `page`, `limit`, `pages`, `hasNext`, `hasPrevious`."
           },
           "event": [
             {
@@ -420,7 +420,7 @@
                 {
                   "key": "sizing",
                   "value": "SIZED",
-                  "description": "SIZED or UNSTITCHED",
+                  "description": "SIZED (stitched) or UNSTITCHED",
                   "disabled": true
                 },
                 {
@@ -443,7 +443,7 @@
                 }
               ]
             },
-            "description": "Listing filters. Combine any of them with each other and with the browse options. The disabled parameters in the Params tab show the rest — tick one to try it.\n\n**Auth:** none.\n**Query (all optional):**\n- `categoryId` — everything under a top-level category, subcategories included.\n- `subcategoryId` — one subcategory only.\n- `sizeId` — only products offered in that size.\n- `sizing` — `SIZED` (choose a size) or `UNSTITCHED`.\n- `onPromotion=true` — only discounted products.\n- `minPrice`, `maxPrice` — in minor units, on the price actually charged.\n- `inStock=true` — hide sold-out products."
+            "description": "Listing filters. Combine any of them with each other and with the browse options. The disabled parameters in the Params tab show the rest — tick one to try it.\n\n**Auth:** none.\n**Query (all optional):**\n- `categoryId` — everything under a top-level category, subcategories included.\n- `subcategoryId` — one subcategory only.\n- `sizeId` — only products offered in that size.\n- `sizing` — `SIZED` (sold stitched, in a size) or `UNSTITCHED`; a product sold both ways matches either.\n- `onPromotion=true` — only products with a discount on either form.\n- `minPrice`, `maxPrice` — in minor units, on the lowest price actually charged.\n- `inStock=true` — hide sold-out products."
           },
           "event": [
             {
@@ -458,8 +458,10 @@
                   "  // Hand a real product to the product-page and checkout requests below.",
                   "  pm.collectionVariables.set('productId', product.id);",
                   "  pm.collectionVariables.set('productSlug', product.slug);",
-                  "  const line = { productId: product.id, quantity: 1 };",
-                  "  if (product.sizing === 'SIZED' && product.sizes.length) line.sizeId = product.sizes[0].id;",
+                  "  // A line names a colour, and a size only when it is bought stitched.",
+                  "  const colour = product.variants.find((v) => v.inStock);",
+                  "  const line = { productId: product.id, variantId: colour.id, quantity: 1 };",
+                  "  if (!product.offers.some((o) => o.sizing === 'UNSTITCHED')) line.sizeId = product.sizes[0].id;",
                   "  pm.collectionVariables.set('checkoutItems', JSON.stringify([line]));",
                   "}"
                 ]
@@ -482,7 +484,7 @@
                 "{{productId}}"
               ]
             },
-            "description": "One product by `id`, with its images, sizes, prices and stock.\n\n**Auth:** none. An unpublished or deleted product is a 404."
+            "description": "One product by `id`, with its prices, sizes and colours — each colour with its own images and stock.\n\n**Auth:** none. An unpublished or deleted product is a 404."
           },
           "event": [
             {
@@ -513,7 +515,7 @@
                 "{{productSlug}}"
               ]
             },
-            "description": "The same product, looked up by the `slug` in its page URL — what a product page loads.\n\n**Auth:** none.\n**Notable fields:**\n- `description` is rich text (HTML, already sanitised by the server) — render it as HTML.\n- `videoUrl` links a video of the product, and `videoPlatform` says where it is — `FACEBOOK` or `YOUTUBE` — so you can embed the right player. Both are null when the product has no video.\n- `sizes` lists the sizes to choose from when `sizing` is `SIZED`; `inStock` and `stock` say whether it can be bought."
+            "description": "The same product, looked up by the `slug` in its page URL — what a product page loads.\n\n**Auth:** none.\n**Notable fields:**\n- `description` is rich text (HTML, already sanitised by the server) — render it as HTML.\n- `videoUrl` links a video of the product, and `videoPlatform` says where it is — `FACEBOOK` or `YOUTUBE` — so you can embed the right player. Both are null when the product has no video.\n- `offers` lists the forms it is sold in, each at its own price: `SIZED` is stitched to one of `sizes`, `UNSTITCHED` needs no size.\n- `variants` are its colours, each with its own `images`; a colour's `inStock` and `stock` say whether it can be bought in that colour."
           },
           "event": [
             {
@@ -838,7 +840,7 @@
                 "checkout"
               ]
             },
-            "description": "Places an order for the signed-in customer.\n\n**Auth:** Bearer token.\n**Headers:** `Idempotency-Key` *(required)* — a new random value (e.g. a UUID) for each order attempt, at least 8 characters. Send the same value again when retrying the same attempt after a timeout, so the customer can never be charged for two orders.\n\n**Body:**\n- `items` *(required, 1–100 lines)* — each `{ \"productId\", \"quantity\", \"sizeId\" }`. `quantity` is 1–999. `sizeId` is needed only for a product sold by size (`sizing: \"SIZED\"`); use one of that product's `sizes`.\n- `shippingAddress` *(required)* — `fullName`, `line1`, `city`, `postalCode`, `country` (two-letter code, e.g. `PK`). Optional: `line2`, `state`, `phone`.\n- `billingAddress` *(optional)* — same shape; defaults to the shipping address.\n- `customerNote` *(optional)* — up to 500 characters.\n\n**Returns:** the order, with status `PENDING` (awaiting payment). Not enough stock is a 409. Limited to 20 a minute.",
+            "description": "Places an order for the signed-in customer.\n\n**Auth:** Bearer token.\n**Headers:** `Idempotency-Key` *(required)* — a new random value (e.g. a UUID) for each order attempt, at least 8 characters. Send the same value again when retrying the same attempt after a timeout, so the customer can never be charged for two orders.\n\n**Body:**\n- `items` *(required, 1–100 lines)* — each `{ \"productId\", \"variantId\", \"quantity\", \"sizeId\" }`. `variantId` is the colour: one of the product's `variants[].id`. `quantity` is 1–999. Send a `sizeId` — one of the product's `sizes` — to buy it stitched, or leave it out to buy it unstitched; either way it must be a form in the product's `offers`, which sets the price.\n- `shippingAddress` *(required)* — `fullName`, `line1`, `city`, `postalCode`, `country` (two-letter code, e.g. `PK`). Optional: `line2`, `state`, `phone`.\n- `billingAddress` *(optional)* — same shape; defaults to the shipping address.\n- `customerNote` *(optional)* — up to 500 characters.\n\n**Returns:** the order, with status `PENDING` (awaiting payment). Not enough stock is a 409. Limited to 20 a minute.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"items\": {{checkoutItems}},\n  \"shippingAddress\": {\n    \"fullName\": \"Ayesha Khan\",\n    \"line1\": \"House 12, Street 4, F-7/2\",\n    \"city\": \"Islamabad\",\n    \"postalCode\": \"44000\",\n    \"country\": \"PK\",\n    \"phone\": \"+92 300 1234567\"\n  },\n  \"customerNote\": \"Please call before delivery\"\n}",

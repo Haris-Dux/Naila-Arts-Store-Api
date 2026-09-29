@@ -6,20 +6,17 @@ import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 
 /**
- * Stock lives on the product document rather than in its own collection, so a
- * decrement is a single-document atomic update with no join and no second write
- * to keep consistent. Ownership of that field is enforced by module boundary:
- * InventoryService is the only place that writes it, and UpdateProductDto has no
- * `stock` key.
- *
- * Phase 5 adds a reservations collection on top for the checkout window; the
- * on-hand figure stays here.
+ * Stock lives in the ERP's `suits` — one per colour of a product — and is
+ * mirrored onto the product's colours, so the catalogue can filter and sort on
+ * it without a join. Ownership of both figures is enforced by module boundary:
+ * InventoryService is the only place a sale or a return moves them, and
+ * UpdateProductDto has no stock key.
  */
 @Module({
   imports: [MongooseModule.forFeature([
       { name: Product.name, schema: ProductSchema },
-      // The collection, not the ErpModule: stock for a linked product lives in
-      // the ERP's `suits`, and this is the only place allowed to move it.
+      // The collection, not the ErpModule: a colour's stock lives in the ERP's
+      // `suits`, and this is the only place allowed to move it.
       { name: Suit.name, schema: SuitSchema },
     ])],
   controllers: [InventoryController],

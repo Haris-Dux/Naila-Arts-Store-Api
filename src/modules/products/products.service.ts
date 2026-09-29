@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectModel } from '@nestjs/mongoose';
-import { ClientSession, FilterQuery, Model, SortOrder, Types } from 'mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { ClientSession, Connection, FilterQuery, Model, SortOrder, Types } from 'mongoose';
 import { CursorPage, Page } from '../../common/dto/pagination.dto';
 import {
   ConflictException,
@@ -18,10 +18,22 @@ import { CategoriesService, CategoryPlacement } from '../categories/categories.s
 import { SizesService } from '../sizes/sizes.service';
 import { ListProductsDto } from './dto/list-products.dto';
 import { ProductResponseDto, ProductSizeResponseDto } from './dto/product-response.dto';
-import { CreateProductDto, ProductImageDto, UpdateProductDto } from './dto/product.dto';
+import {
+  CreateProductDto,
+  ProductImageDto,
+  ProductOfferDto,
+  ProductVariantDto,
+  UpdateProductDto,
+} from './dto/product.dto';
 import { ProductSizing } from './enums/product-sizing.enum';
 import { VideoPlatform, isVideoOnPlatform } from './enums/video-platform.enum';
-import { Product, ProductDocument, ProductImage } from './schemas/product.schema';
+import {
+  Product,
+  ProductDocument,
+  ProductImage,
+  ProductOffer,
+  ProductVariant,
+} from './schemas/product.schema';
 import { Suit, SuitDocument } from '../erp/schemas/suit.schema';
 import { toDescription } from './rich-text';
 
@@ -38,6 +50,7 @@ export class ProductsService {
   private readonly currency: string;
 
   constructor(
+    @InjectConnection() private readonly connection: Connection,
     @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
     @InjectModel(Suit.name) private readonly suitModel: Model<SuitDocument>,
     private readonly cache: CatalogCacheService,
@@ -93,9 +106,7 @@ export class ProductsService {
     // One lookup for the whole page, not one per product. A grid is the place
     // images matter most, so unlike sizes — which stay as bare ids on a listing —
     // these are resolved: without a URL there is nothing to render.
-    const images = await this.media.findManyByIds(
-      documents.flatMap((d) => d.images.map((image) => image.mediaId.toString())),
-    );
+    const images = await this.media.findManyByIds(ProductsService.imageIds(documents));
 
     const page = Page.of(
       documents.map((d) => ProductResponseDto.from(d, this.currency, undefined, images)),
@@ -176,9 +187,7 @@ export class ProductsService {
     });
 
     // One media lookup for the whole list, as on a listing page.
-    const images = await this.media.findManyByIds(
-      products.flatMap((p) => p.images.map((image) => image.mediaId.toString())),
-    );
+    const images = await this.media.findManyByIds(ProductsService.imageIds(products));
 
     return products.map((p) => ProductResponseDto.from(p, this.currency, undefined, images));
   }
@@ -218,13 +227,10 @@ export class ProductsService {
       dto.categoryId,
       dto.subcategoryId ?? null,
     );
-    const promotionalPrice = ProductsService.resolvePromotion(dto.price, dto.promotionalPrice);
-    // Every image must resolve before the product is written, so the catalogue
-    // can never point at a file that is not there.
-    await this.media.assertAllExist((dto.images ?? []).map((image) => image.mediaId));
-    const sizing = await this.resolveSizing(dto.sizes ?? [], dto.sizing);
+    const offers = ProductsService.resolveOffers(dto.offers);
+    const sizeIds = await this.resolveSizes(dto.sizes ?? [], offers);
     const video = ProductsService.resolveVideo(dto.videoUrl, dto.videoPlatform) ?? NO_VIDEO;
-    const suit = dto.erpId ? await this.resolveSuit(dto.erpId) : null;
+    const variants = await this.resolveVariants(dto.variants);
     const description = toDescription(dto.description);
 
     const product = await this.productModel.create({
@@ -234,19 +240,13 @@ export class ProductsService {
       descriptionText: description.text,
       videoUrl: video.videoUrl,
       videoPlatform: video.videoPlatform,
-      price: dto.price,
-      promotionalPrice,
-      effectivePrice: promotionalPrice ?? dto.price,
-      // A product built on a suit starts with the suit's stock, whatever the
-      // request says: from here on the ERP owns that number.
-      stock: suit ? suit.stock : (dto.stock ?? 0),
-      erpId: suit ? dto.erpId : null,
-      erpSyncedAt: suit ? new Date() : null,
+      offers,
+      effectivePrice: ProductsService.lowestPrice(offers),
+      variants,
+      stock: ProductsService.totalStock(variants),
       categoryId: placement.categoryId,
       subcategoryId: placement.subcategoryId,
-      sizes: sizing.sizeIds,
-      sizing: sizing.sizing,
-      images: ProductsService.toImages(dto.images),
+      sizes: sizeIds,
       sku: dto.sku ?? null,
       isActive: dto.isActive ?? true,
     });
@@ -261,70 +261,84 @@ export class ProductsService {
   }
 
   async update(id: string, dto: UpdateProductDto): Promise<ProductResponseDto> {
-    // One read, and it is awaited. The old gateway called `getProduct(id)`
-    // without awaiting, so `if (!product)` tested a Promise — always truthy —
-    // and the 404 branch was unreachable dead code. It then re-fetched the same
-    // product downstream, paying for two round trips to check nothing.
-    const product = await this.getDocumentOrThrow(id);
+    const session = await this.connection.startSession();
 
-    if (dto.name !== undefined) product.name = dto.name;
-    if (dto.slug !== undefined) product.slug = await this.uniqueSlug(dto.slug, product._id);
-    if (dto.description !== undefined) {
-      const description = toDescription(dto.description);
-      product.description = description.html;
-      product.descriptionText = description.text;
-    }
-    const video = ProductsService.resolveVideo(dto.videoUrl, dto.videoPlatform);
-    if (video) {
-      product.videoUrl = video.videoUrl;
-      product.videoPlatform = video.videoPlatform;
-    }
-    if (dto.isActive !== undefined) product.isActive = dto.isActive;
+    try {
+      let updated: ProductDocument | undefined;
 
-    // Price and promotion are resolved together from the merged state: raising
-    // the list price above a running promotion, or lowering it beneath one, both
-    // have to be judged against the value the other one ends up with.
-    if (dto.price !== undefined || dto.promotionalPrice !== undefined) {
-      const price = dto.price ?? product.price;
-      const promotionalPrice = ProductsService.resolvePromotion(
-        price,
-        dto.promotionalPrice !== undefined ? dto.promotionalPrice : product.promotionalPrice,
+      /**
+       * One transaction, because replacing the colours rewrites each kept
+       * colour's stock with the figure read here. A sale or an ERP change that
+       * lands on this product in between is a write conflict, and
+       * `withTransaction` runs the whole edit again against the new figures —
+       * rather than writing back the old ones and selling units that are gone.
+       */
+      await session.withTransaction(async () => {
+        // One read, and it is awaited. The old gateway called `getProduct(id)`
+        // without awaiting, so `if (!product)` tested a Promise — always truthy —
+        // and the 404 branch was unreachable dead code. It then re-fetched the
+        // same product downstream, paying for two round trips to check nothing.
+        const product = await this.getDocumentOrThrow(id, session);
+
+        if (dto.name !== undefined) product.name = dto.name;
+        if (dto.slug !== undefined) product.slug = await this.uniqueSlug(dto.slug, product._id);
+        if (dto.description !== undefined) {
+          const description = toDescription(dto.description);
+          product.description = description.html;
+          product.descriptionText = description.text;
+        }
+        const video = ProductsService.resolveVideo(dto.videoUrl, dto.videoPlatform);
+        if (video) {
+          product.videoUrl = video.videoUrl;
+          product.videoPlatform = video.videoPlatform;
+        }
+        if (dto.isActive !== undefined) product.isActive = dto.isActive;
+
+        // Offers and sizes are resolved together from the merged state: dropping
+        // the stitched offer, or clearing the sizes, both have to be judged
+        // against the value the other one ends up with.
+        if (dto.offers !== undefined || dto.sizes !== undefined) {
+          const offers = dto.offers ? ProductsService.resolveOffers(dto.offers) : product.offers;
+          product.sizes = await this.resolveSizes(
+            dto.sizes ?? product.sizes.map((size) => size.toString()),
+            offers,
+          );
+          if (dto.offers) {
+            product.offers = offers;
+            product.effectivePrice = ProductsService.lowestPrice(offers);
+          }
+        }
+        const placement = await this.resolvePlacement(product, dto);
+        if (placement) {
+          product.categoryId = placement.categoryId;
+          product.subcategoryId = placement.subcategoryId;
+        }
+        if (dto.variants !== undefined) {
+          product.variants = await this.resolveVariants(dto.variants, product);
+          product.stock = ProductsService.totalStock(product.variants);
+        }
+        if (dto.sku !== undefined) {
+          await this.assertSkuAvailable(dto.sku, product._id);
+          product.sku = dto.sku ?? null;
+        }
+
+        await product.save({ session });
+        updated = product;
+      });
+
+      const product = updated!;
+      // After the commit, for the same reason as checkout: retiring the cache
+      // any earlier lets a concurrent read repopulate it from the old state.
+      await this.cache.invalidate();
+      return ProductResponseDto.from(
+        product,
+        this.currency,
+        await this.describeSizes(product),
+        await this.describeImages(product),
       );
-      product.price = price;
-      product.promotionalPrice = promotionalPrice;
-      product.effectivePrice = promotionalPrice ?? price;
+    } finally {
+      await session.endSession();
     }
-
-    if (dto.sizes !== undefined || dto.sizing !== undefined) {
-      const sizing = await this.resolveSizing(
-        dto.sizes ?? product.sizes.map((id) => id.toString()),
-        dto.sizing,
-      );
-      product.sizes = sizing.sizeIds;
-      product.sizing = sizing.sizing;
-    }
-    const placement = await this.resolvePlacement(product, dto);
-    if (placement) {
-      product.categoryId = placement.categoryId;
-      product.subcategoryId = placement.subcategoryId;
-    }
-    if (dto.images !== undefined) {
-      await this.media.assertAllExist(dto.images.map((image) => image.mediaId));
-      product.images = ProductsService.toImages(dto.images);
-    }
-    if (dto.sku !== undefined) {
-      await this.assertSkuAvailable(dto.sku, product._id);
-      product.sku = dto.sku ?? null;
-    }
-
-    await product.save();
-    await this.cache.invalidate();
-    return ProductResponseDto.from(
-      product,
-      this.currency,
-      await this.describeSizes(product),
-      await this.describeImages(product),
-    );
   }
 
   /**
@@ -400,7 +414,7 @@ export class ProductsService {
    * request touches neither.
    *
    * The two are stored as separate fields but only ever mean something as a
-   * pair, so they are validated as one — the same reasoning as `resolveSizing`.
+   * pair, so they are validated as one — the same reasoning as `resolveSizes`.
    * Checked here rather than on the DTO because only here are both values in
    * hand: the DTO has already ruled out any host that is on neither platform.
    *
@@ -448,29 +462,95 @@ export class ProductsService {
   }
 
   /**
-   * Resolve the size list and the sizing mode together.
+   * Price each form the product is sold in.
    *
-   * When the client states `sizing`, the pair is checked; when it does not, the
-   * mode follows the list. Either way they cannot end up disagreeing, which is
-   * the point of deriving rather than storing two independent fields.
+   * Stored stitched first, whatever order they arrived in, so every client
+   * lists them the same way. The DTO has already refused a form priced twice.
    */
-  private async resolveSizing(
-    sizeIds: string[],
-    stated?: ProductSizing,
-  ): Promise<{ sizeIds: Types.ObjectId[]; sizing: ProductSizing }> {
-    const resolved = await this.sizes.resolveMany(sizeIds);
-    const inferred = resolved.length > 0 ? ProductSizing.SIZED : ProductSizing.UNSTITCHED;
-    const sizing = stated ?? inferred;
+  private static resolveOffers(offers: ProductOfferDto[]): ProductOffer[] {
+    const order = Object.values(ProductSizing);
 
-    if (sizing === ProductSizing.SIZED && resolved.length === 0) {
-      throw new ValidationFailedException('A sized product must offer at least one size');
+    return [...offers]
+      .sort((a, b) => order.indexOf(a.sizing) - order.indexOf(b.sizing))
+      .map((offer) => {
+        const promotionalPrice = ProductsService.resolvePromotion(
+          offer.price,
+          offer.promotionalPrice,
+        );
+        return {
+          sizing: offer.sizing,
+          price: offer.price,
+          promotionalPrice,
+          effectivePrice: promotionalPrice ?? offer.price,
+        };
+      });
+  }
+
+  /** The "from" price: the least the product can be bought for, in any form. */
+  private static lowestPrice(offers: ProductOffer[]): number {
+    return Math.min(...offers.map((offer) => offer.effectivePrice));
+  }
+
+  /**
+   * Resolve the size list against the forms on offer.
+   *
+   * A size is what a stitched piece is cut to, so a SIZED offer needs at least
+   * one and a product sold only unstitched may have none. Judged together, so
+   * the two can never end up disagreeing.
+   */
+  private async resolveSizes(sizeIds: string[], offers: ProductOffer[]): Promise<Types.ObjectId[]> {
+    const resolved = await this.sizes.resolveMany(sizeIds);
+    const stitched = offers.some((offer) => offer.sizing === ProductSizing.SIZED);
+
+    if (stitched && resolved.length === 0) {
+      throw new ValidationFailedException('A product sold stitched must offer at least one size');
     }
-    if (sizing === ProductSizing.UNSTITCHED && resolved.length > 0) {
-      throw new ValidationFailedException('An unstitched product cannot be offered in sizes');
+    if (!stitched && resolved.length > 0) {
+      throw new ValidationFailedException('Only a product sold stitched can be offered in sizes');
     }
 
     // Stored in the merchant's display order, not the order the ids arrived in.
-    return { sizeIds: resolved.map((size) => size.id), sizing };
+    return resolved.map((size) => size.id);
+  }
+
+  /**
+   * The colours a write leaves the product with, in the order they were sent.
+   *
+   * A colour is its ERP suit. One the product already has keeps its id, its
+   * stock and when it was linked, and takes the name and photographs sent; a
+   * new suit is checked and brings its stock with it. Every photograph must
+   * resolve before anything is written, so the catalogue can never point at a
+   * file that is not there.
+   */
+  private async resolveVariants(
+    variants: ProductVariantDto[],
+    product?: ProductDocument,
+  ): Promise<ProductVariant[]> {
+    await this.media.assertAllExist(
+      variants.flatMap((variant) => (variant.images ?? []).map((image) => image.mediaId)),
+    );
+
+    const resolved: ProductVariant[] = [];
+    for (const variant of variants) {
+      const kept = product?.variants.find((existing) => existing.erpId === variant.erpId);
+
+      resolved.push({
+        _id: kept?._id ?? new Types.ObjectId(),
+        color: variant.color,
+        erpId: variant.erpId,
+        erpSyncedAt: kept?.erpSyncedAt ?? new Date(),
+        // A new colour starts with its suit's stock; from there on the ERP owns
+        // that number. A kept colour carries over the figure read inside the
+        // update's transaction — see `update`.
+        stock: kept ? kept.stock : (await this.resolveSuit(variant.erpId, product?._id)).stock,
+        images: ProductsService.toImages(variant.images),
+      });
+    }
+    return resolved;
+  }
+
+  private static totalStock(variants: ProductVariant[]): number {
+    return variants.reduce((total, variant) => total + variant.stock, 0);
   }
 
   /** Look up the size names for one product, for a detail page. */
@@ -498,17 +578,28 @@ export class ProductsService {
 
   /** Resolve a product's image references to URLs and dimensions. */
   private async describeImages(product: ProductDocument) {
-    if (product.images.length === 0) return new Map();
-    return this.media.findManyByIds(product.images.map((image) => image.mediaId.toString()));
+    return this.media.findManyByIds(ProductsService.imageIds([product]));
+  }
+
+  /** Every image the products' colours show, for one media lookup. */
+  private static imageIds(products: ProductDocument[]): string[] {
+    return products.flatMap((product) =>
+      product.variants.flatMap((variant) =>
+        variant.images.map((image) => image.mediaId.toString()),
+      ),
+    );
   }
 
   private isStaff(viewer?: AuthenticatedUser): boolean {
     return viewer ? roleAtLeast(viewer.role, UserRole.ADMIN) : false;
   }
 
-  private async getDocumentOrThrow(id: string): Promise<ProductDocument> {
+  private async getDocumentOrThrow(id: string, session?: ClientSession): Promise<ProductDocument> {
     if (!Types.ObjectId.isValid(id)) throw new ResourceNotFoundException('Product', id);
-    const product = await this.productModel.findOne({ _id: id, ...notDeleted }).exec();
+    const product = await this.productModel
+      .findOne({ _id: id, ...notDeleted })
+      .session(session ?? null)
+      .exec();
     if (!product) throw new ResourceNotFoundException('Product', id);
     return product;
   }
@@ -531,13 +622,17 @@ export class ProductsService {
     if (query.categoryId) filter.categoryId = new Types.ObjectId(query.categoryId);
     if (query.subcategoryId) filter.subcategoryId = new Types.ObjectId(query.subcategoryId);
     if (query.inStock) filter.stock = { $gt: 0 };
-    if (query.sizing) filter.sizing = query.sizing;
+    // A product sold both ways is offered in either form, so it matches both.
+    if (query.sizing) filter['offers.sizing'] = query.sizing;
     if (query.sizeId) filter.sizes = new Types.ObjectId(query.sizeId);
-    if (query.onPromotion) filter.promotionalPrice = { $ne: null };
+    // Any form on promotion. `$type` rather than `$ne: null`: on an array path,
+    // `$ne` would demand that *no* form lacks a promotion.
+    if (query.onPromotion) filter['offers.promotionalPrice'] = { $type: 'number' };
 
     // Against what is actually charged, not the list price: a shopper filtering
     // "under 3000" means what they will pay, and a promoted product must fall
-    // into the band its promotional price puts it in.
+    // into the band its promotional price puts it in. With two forms, that is
+    // the cheaper one — the "from" price the listing shows.
     if (query.minPrice !== undefined || query.maxPrice !== undefined) {
       filter.effectivePrice = {
         ...(query.minPrice !== undefined ? { $gte: query.minPrice } : {}),
@@ -615,9 +710,7 @@ export class ProductsService {
       .limit(query.limit + 1)
       .exec();
 
-    const images = await this.media.findManyByIds(
-      documents.flatMap((d) => d.images.map((image) => image.mediaId.toString())),
-    );
+    const images = await this.media.findManyByIds(ProductsService.imageIds(documents));
 
     const rows = documents.map((document) => ({
       dto: ProductResponseDto.from(document, this.currency, undefined, images),
@@ -674,21 +767,26 @@ export class ProductsService {
   }
 
   /**
-   * The suit a new product is to be built on, and the stock it starts with.
+   * The suit a new colour is to be, and the stock it starts with.
    *
    * Refuses a suit that does not exist, one with nothing to sell (the dashboard
    * never offers those, and the API should not accept them either), and one
-   * another live product is already built on — two listings drawing on one
-   * stock figure would each advertise the same units.
+   * another live product already sells — two listings drawing on one stock
+   * figure would each advertise the same units. `excludeId` is the product
+   * being edited, which may of course keep its own suits.
    */
-  private async resolveSuit(erpId: string): Promise<{ stock: number }> {
+  private async resolveSuit(erpId: string, excludeId?: Types.ObjectId): Promise<{ stock: number }> {
     const suit = await this.suitModel.findById(erpId).select('_id quantity').lean().exec();
     if (!suit) throw new ResourceNotFoundException('Suit', erpId);
 
     const stock = Math.max(0, Math.trunc(suit.quantity ?? 0));
     if (stock === 0) throw new ValidationFailedException(`Suit ${erpId} has no stock`);
 
-    const taken = await this.productModel.exists({ erpId, ...notDeleted });
+    const taken = await this.productModel.exists({
+      'variants.erpId': erpId,
+      ...notDeleted,
+      ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    });
     if (taken) throw new ConflictException(`Suit ${erpId} is already used by another product`);
 
     return { stock };

@@ -87,7 +87,7 @@ export const MAX_LINE_QUANTITY = 999;
  * One line of the basket: what, and how many. Nothing else.
  *
  * The basket lives in the browser, so the client does send the lines — but it
- * sends only these two fields. The old `CreateOrderDto` took `unitPrice`,
+ * sends only what was chosen. The old `CreateOrderDto` took `unitPrice`,
  * `totalPrice` and `userId` from the request body and never checked any of it
  * against the catalogue, which is how a client could buy anything for a penny on
  * anybody's account. A price or a total appearing here would be rejected as an
@@ -99,6 +99,14 @@ export class CheckoutItemDto {
   @IsMongoId()
   productId!: string;
 
+  /** The colour: one of the product's `variants[].id`. */
+  @ApiProperty({
+    example: '507f1f77bcf86cd799439012',
+    description: 'One of the product’s variants',
+  })
+  @IsMongoId()
+  variantId!: string;
+
   @ApiProperty({ example: 2, minimum: 1, maximum: MAX_LINE_QUANTITY })
   @IsInt()
   @Min(1)
@@ -106,13 +114,15 @@ export class CheckoutItemDto {
   quantity!: number;
 
   /**
-   * Required for a sized product, refused for an unstitched one.
+   * The size to stitch it to — which is what makes this a stitched line.
+   * Omitted, the line is for the unstitched piece.
    *
-   * Without it a sized order cannot be picked and packed, so it is validated
-   * against the product rather than accepted and ignored. Two lines of the same
-   * product in different sizes are two lines, not a duplicate.
+   * Each form must be one the product is sold in, and a size one it offers:
+   * without a size a stitched order cannot be cut, so it is validated against
+   * the product rather than accepted and ignored. Two lines of the same colour
+   * in different sizes, or stitched and not, are two lines, not a duplicate.
    */
-  @ApiPropertyOptional({ description: 'Required when the product is sold by size' })
+  @ApiPropertyOptional({ description: 'Buys it stitched, in this size; omit to buy it unstitched' })
   @IsOptional()
   @IsMongoId()
   sizeId?: string;
@@ -123,7 +133,7 @@ export class CheckoutItemDto {
  *
  * Note what is still *not* here: no prices, no totals, no userId. Lines, prices
  * and the customer are the three things the old stack let a client dictate; only
- * the first has moved, and only as far as product ids and quantities.
+ * the first has moved, and only as far as what was chosen and how many.
  */
 export class CheckoutDto {
   /**

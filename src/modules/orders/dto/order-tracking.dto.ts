@@ -24,6 +24,8 @@ export class LookupOrderDto {
 export class OrderTrackingItemDto {
   @ApiProperty() productId!: string;
   @ApiProperty() name!: string;
+  @ApiProperty() color!: string;
+  /** Null when the line was sold unstitched. */
   @ApiPropertyOptional({ type: String, nullable: true }) size!: string | null;
   @ApiProperty() quantity!: number;
   @ApiProperty({ type: MoneyDto }) lineTotal!: MoneyDto;

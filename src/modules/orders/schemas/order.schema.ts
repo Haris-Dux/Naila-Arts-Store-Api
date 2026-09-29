@@ -40,23 +40,32 @@ export class OrderItem {
   @Prop({ required: true })
   name!: string;
 
+  /** The colour sold — whose stock the units came from, and go back to. */
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true })
+  variantId!: Types.ObjectId;
+
+  /** The colour's name at the time of sale, snapshotted like the product's. */
+  @Prop({ required: true })
+  color!: string;
+
   @Prop({ type: String, default: null })
   sku!: string | null;
 
   /**
    * The size the customer picked, snapshotted like the name and the price.
    *
-   * Null for an unstitched piece. Stored by value rather than by reference for
-   * the same reason as the name: the size list is the merchant's to reorder and
-   * rename, and a picking slip printed next year must still say what shipped.
+   * Null for an unstitched piece — which is how a line records that it was
+   * sold unstitched. Stored by value rather than by reference for the same
+   * reason as the name: the size list is the merchant's to reorder and rename,
+   * and a picking slip printed next year must still say what shipped.
    */
   @Prop({ type: OrderItemSizeSchema, default: null })
   size!: OrderItemSize | null;
 
   /**
-   * Minor units, taken from the catalogue at checkout — the *effective* price,
-   * so a promotion running at the moment of sale is what the customer is
-   * charged and what the order records.
+   * Minor units, taken from the catalogue at checkout — the *effective* price
+   * of the form sold, stitched or unstitched, so a promotion running at the
+   * moment of sale is what the customer is charged and what the order records.
    */
   @Prop({ type: Number, required: true, min: 0 })
   unitPrice!: number;

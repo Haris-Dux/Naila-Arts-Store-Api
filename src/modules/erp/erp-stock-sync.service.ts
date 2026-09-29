@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types, mongo } from 'mongoose';
+import { Model, PipelineStage, Types, mongo } from 'mongoose';
 
 import { EVENTS, ProductsChangedEvent } from '../../events/domain-events';
 import { notDeleted } from '../../common/schemas/base.schema';
@@ -25,13 +25,13 @@ const STREAM_RETRY_BASE_MS = 1_000;
 const STREAM_RETRY_MAX_MS = 60_000;
 
 /**
- * Keeps `Product.stock` matching the ERP's `suits.quantity`.
+ * Keeps each product colour's stock matching the ERP's `suits.quantity`.
  *
  * The ERP is the source of truth: branch workers book sale and return bills that
- * move `suits.quantity` without the store ever seeing the bill. `Product.stock` is
- * a mirror, kept only so the catalogue's existing filters, sorts and indexes —
- * `?inStock=true`, `sort=stock`, the low-stock report — keep working without a
- * `$lookup` on every query.
+ * move `suits.quantity` without the store ever seeing the bill. A colour's
+ * `stock`, and the product's total over its colours, are mirrors, kept only so
+ * the catalogue's filters, sorts and indexes — `?inStock=true`, `sort=stock`,
+ * the low-stock report — keep working without a `$lookup` on every query.
  *
  * Two mechanisms, and both are needed:
  *
@@ -237,7 +237,7 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Write one suit's stock onto every product built on it.
+   * Write one suit's stock onto every product colour that is that suit.
    *
    * `$ne` in the filter makes this a no-op when the mirror already agrees, which
    * is the common case: the store's own sales wrote both numbers in one
@@ -246,6 +246,7 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
    * trigger.
    */
   private async applyStock(suitId: Types.ObjectId, stock: number): Promise<void> {
+    const erpId = suitId.toString();
     const normalised = Math.max(0, Math.trunc(stock));
 
     /**
@@ -259,8 +260,8 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
      */
     const result = await this.productModel
       .updateMany(
-        { erpId: suitId.toString(), stock: { $ne: normalised }, ...notDeleted },
-        { $set: { stock: normalised } },
+        { variants: { $elemMatch: { erpId, stock: { $ne: normalised } } }, ...notDeleted },
+        ErpStockSyncService.setColourStock(erpId, normalised),
       )
       .exec();
 
@@ -272,7 +273,38 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Compare every linked product against its suit and correct the drift.
+   * Set one colour's stock and re-total the product, in a single statement.
+   *
+   * An update pipeline rather than `$set` on a positional path, because the
+   * product's total has to be recomputed from the colours as they are *after*
+   * the write — and doing that in the same statement means no reader, and no
+   * concurrent sale, ever sees the two disagree.
+   */
+  private static setColourStock(erpId: string, stock: number): PipelineStage.Set[] {
+    return [
+      {
+        $set: {
+          variants: {
+            $map: {
+              input: '$variants',
+              as: 'variant',
+              in: {
+                $cond: [
+                  { $eq: ['$$variant.erpId', erpId] },
+                  { $mergeObjects: ['$$variant', { stock }] },
+                  '$$variant',
+                ],
+              },
+            },
+          },
+        },
+      },
+      { $set: { stock: { $sum: '$variants.stock' } } },
+    ];
+  }
+
+  /**
+   * Compare every product colour against its suit and correct the drift.
    *
    * Logs what it corrected rather than healing silently: a sweep that keeps
    * finding drift means the change stream is not working, and silence would hide
@@ -284,12 +316,8 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
 
     for (;;) {
       const products = await this.productModel
-        .find({
-          erpId: { $ne: null },
-          ...notDeleted,
-          ...(lastId ? { _id: { $gt: lastId } } : {}),
-        })
-        .select('_id erpId stock')
+        .find({ ...notDeleted, ...(lastId ? { _id: { $gt: lastId } } : {}) })
+        .select('_id variants.erpId variants.stock')
         .sort({ _id: 1 })
         .limit(RECONCILE_BATCH)
         .lean()
@@ -299,8 +327,8 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
       lastId = products[products.length - 1]._id;
 
       const suitIds = products
-        .map((product) => product.erpId)
-        .filter((id): id is string => !!id && Types.ObjectId.isValid(id))
+        .flatMap((product) => product.variants.map((variant) => variant.erpId))
+        .filter((id) => Types.ObjectId.isValid(id))
         .map((id) => new Types.ObjectId(id));
 
       const suits = await this.suitModel
@@ -311,27 +339,35 @@ export class ErpStockSyncService implements OnModuleInit, OnModuleDestroy {
 
       const stockBySuit = new Map(suits.map((suit) => [suit._id.toString(), suit.quantity ?? 0]));
 
-      const drifted = products.filter((product) => {
-        const truth = product.erpId ? stockBySuit.get(product.erpId) : undefined;
-        // A product whose suit is missing is left alone deliberately: the mirror
-        // is the last figure the ERP published, and zeroing it on a failed lookup
-        // would hide the whole catalogue on a transient read.
-        return truth !== undefined && truth !== product.stock;
-      });
+      const driftedProducts = new Set<string>();
 
-      for (const product of drifted) {
-        const truth = Math.max(0, Math.trunc(stockBySuit.get(product.erpId!)!));
-        await this.productModel.updateOne({ _id: product._id }, { $set: { stock: truth } }).exec();
-        this.logger.warn(
-          `Corrected stock drift on product ${product._id.toString()}: ` +
-            `${product.stock} -> ${truth} (suit ${product.erpId})`,
-        );
+      for (const product of products) {
+        for (const variant of product.variants) {
+          const truth = stockBySuit.get(variant.erpId);
+          // A colour whose suit is missing is left alone deliberately: the mirror
+          // is the last figure the ERP published, and zeroing it on a failed
+          // lookup would hide the whole catalogue on a transient read.
+          if (truth === undefined) continue;
+
+          const normalised = Math.max(0, Math.trunc(truth));
+          if (normalised === variant.stock) continue;
+
+          await this.productModel
+            .updateOne(
+              { _id: product._id },
+              ErpStockSyncService.setColourStock(variant.erpId, normalised),
+            )
+            .exec();
+          this.logger.warn(
+            `Corrected stock drift on product ${product._id.toString()}: ` +
+              `${variant.stock} -> ${normalised} (suit ${variant.erpId})`,
+          );
+          driftedProducts.add(product._id.toString());
+          corrected += 1;
+        }
       }
 
-      if (drifted.length > 0) {
-        await this.announce(drifted.map((product) => product._id.toString()));
-        corrected += drifted.length;
-      }
+      await this.announce([...driftedProducts]);
 
       if (products.length < RECONCILE_BATCH) break;
     }

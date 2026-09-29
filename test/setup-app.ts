@@ -1,12 +1,16 @@
 import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
+import { getModelToken } from '@nestjs/mongoose';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
+import { Suit, SuitDocument } from '../src/modules/erp/schemas/suit.schema';
+import { SUIT_FIELDS } from '../src/modules/erp/suit-fields';
 
 export interface TestContext {
   app: INestApplication;
@@ -124,4 +128,30 @@ export async function createCategory(
     .expect(201);
 
   return created.body.data.id as string;
+}
+
+/**
+ * An ERP suit — one design in one colour — holding `quantity` units.
+ *
+ * Every colour of a product is a suit, and the suit's quantity is its stock, so
+ * a suite needs one per colour before it can create a product. Written straight
+ * into the ERP's collection, the way the ERP itself would.
+ */
+export async function createSuit(
+  app: INestApplication,
+  quantity = 100,
+  color = 'Red',
+): Promise<string> {
+  const suits = app.get<Model<SuitDocument>>(getModelToken(Suit.name));
+  const id = new Types.ObjectId();
+
+  await suits.collection.insertOne({
+    _id: id,
+    [SUIT_FIELDS.design]: 600,
+    [SUIT_FIELDS.category]: 'Lawn',
+    [SUIT_FIELDS.color]: color,
+    quantity,
+  });
+
+  return id.toString();
 }

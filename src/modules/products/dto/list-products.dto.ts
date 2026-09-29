@@ -105,7 +105,10 @@ export class ListProductsDto extends PaginationDto {
   @IsMongoId()
   subcategoryId?: string;
 
-  @ApiPropertyOptional({ enum: ProductSizing, description: 'Sized or unstitched' })
+  @ApiPropertyOptional({
+    enum: ProductSizing,
+    description: 'Only products sold in this form; one sold both ways matches either',
+  })
   @IsOptional()
   @IsEnum(ProductSizing)
   sizing?: ProductSizing;
@@ -115,13 +118,15 @@ export class ListProductsDto extends PaginationDto {
   @IsMongoId()
   sizeId?: string;
 
-  @ApiPropertyOptional({ description: 'Only products with a promotional price' })
+  @ApiPropertyOptional({ description: 'Only products with a promotional price, in any form' })
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
   @IsBoolean()
   onPromotion?: boolean;
 
-  @ApiPropertyOptional({ description: 'Minimum price, minor units — the price charged' })
+  @ApiPropertyOptional({
+    description: 'Minimum price, minor units — the price charged, in the cheaper form',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

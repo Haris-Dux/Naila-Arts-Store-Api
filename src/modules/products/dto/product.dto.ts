@@ -1,9 +1,10 @@
-import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { ProductSizing } from '../enums/product-sizing.enum';
 import { ALL_VIDEO_HOSTS, VideoPlatform } from '../enums/video-platform.enum';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   ArrayUnique,
   IsEnum,
   IsArray,
@@ -22,8 +23,11 @@ import {
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : (value as string);
 
-/** A product carries at most this many photographs. */
+/** Each colour of a product carries at most this many photographs. */
 export const MAX_PRODUCT_IMAGES = 8;
+
+/** A product comes in at most this many colours. */
+export const MAX_PRODUCT_VARIANTS = 20;
 
 export class ProductImageDto {
   /**
@@ -51,6 +55,89 @@ export class ProductImageDto {
   @IsInt()
   @Min(0)
   position?: number;
+}
+
+/** One form the product is sold in, and its price in that form. */
+export class ProductOfferDto {
+  @ApiProperty({ enum: ProductSizing, description: 'SIZED is sold stitched, to a size' })
+  @IsEnum(ProductSizing)
+  sizing!: ProductSizing;
+
+  /**
+   * Minor units, as an integer — 1999 means $19.99.
+   *
+   * The API deliberately does not accept decimals: a JSON float cannot represent
+   * 19.99 exactly, and rounding it at the edge is how prices drift by a cent.
+   * Currency comes from store configuration, so it is not per-product.
+   */
+  @ApiProperty({ description: 'Price in minor units (1999 = $19.99)', example: 1999 })
+  @IsInt({ message: 'price must be an integer number of minor units (1999 = $19.99)' })
+  @Min(0)
+  price!: number;
+
+  /**
+   * Promotional price in minor units, or null for none.
+   *
+   * `price` stays the regular price throughout, so clearing this restores it
+   * without anyone having to remember what it was. Must be below `price`.
+   */
+  @ApiPropertyOptional({
+    description: 'Promotional price in minor units; null or omitted for none',
+    example: 1499,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsInt({ message: 'promotionalPrice must be an integer number of minor units' })
+  @Min(0)
+  promotionalPrice?: number | null;
+}
+
+/**
+ * One colour of the product: an ERP suit, and its photographs.
+ *
+ * The suit is what identifies the colour. On an update, an entry whose `erpId`
+ * the product already has keeps that colour — its id and its stock — and
+ * takes the name and photographs sent; a new `erpId` adds a colour; a colour
+ * left out is removed.
+ */
+export class ProductVariantDto {
+  /**
+   * The ERP suit — a `suits._id`. The colour's stock is the suit's: the ERP is
+   * the source of truth for it.
+   *
+   * Lower-cased on the way in. An id is valid hex in either case, but it is
+   * stored and compared as text — against another colour, another product, and
+   * the ERP's change stream, which always reports it in lower case. An upper-case
+   * copy would pass as a different suit and never be synced.
+   */
+  @ApiProperty({ description: 'ERP suit id; the colour’s stock is taken from the suit' })
+  @IsMongoId()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.toLowerCase() : (value as string),
+  )
+  erpId!: string;
+
+  @ApiProperty({ example: 'Red', description: 'The colour as the storefront names it' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(60)
+  @Transform(trim)
+  color!: string;
+
+  @ApiPropertyOptional({ type: [ProductImageDto], maxItems: MAX_PRODUCT_IMAGES })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_PRODUCT_IMAGES, {
+    message: `A colour may have at most ${MAX_PRODUCT_IMAGES} images`,
+  })
+  // Uploading the same bytes twice returns the same media id, so without this a
+  // colour could show one photograph twice in its gallery.
+  @ArrayUnique((image: ProductImageDto | null | undefined) => image?.mediaId, {
+    message: 'Each image may appear only once',
+  })
+  @ValidateNested({ each: true })
+  @Type(() => ProductImageDto)
+  images?: ProductImageDto[];
 }
 
 export class CreateProductDto {
@@ -107,54 +194,37 @@ export class CreateProductDto {
   videoPlatform?: VideoPlatform | null;
 
   /**
-   * The ERP suit this product is built on — a `suits._id`.
-   *
-   * When given, the product's stock is the suit's, and any `stock` sent
-   * alongside is ignored: the ERP is the source of truth for it.
+   * The forms it is sold in — stitched, unstitched, or both — each with its own
+   * price. Every colour shares these prices.
    */
-  @ApiPropertyOptional({ description: 'ERP suit id; stock is then taken from the suit' })
-  @IsOptional()
-  @IsMongoId()
-  erpId?: string;
-
-  /**
-   * Minor units, as an integer — 1999 means $19.99.
-   *
-   * The API deliberately does not accept decimals: a JSON float cannot represent
-   * 19.99 exactly, and rounding it at the edge is how prices drift by a cent.
-   * Currency comes from store configuration, so it is not per-product.
-   */
-  @ApiProperty({ description: 'Price in minor units (1999 = $19.99)', example: 1999 })
-  @IsInt({ message: 'price must be an integer number of minor units (1999 = $19.99)' })
-  @Min(0)
-  price!: number;
-
-  /**
-   * Promotional price in minor units, or null to end a promotion.
-   *
-   * `price` stays the regular price throughout, so clearing this restores it
-   * without anyone having to remember what it was. Must be below `price`.
-   */
-  @ApiPropertyOptional({
-    description: 'Promotional price in minor units; null ends the promotion',
-    example: 1999,
-    nullable: true,
+  @ApiProperty({ type: [ProductOfferDto], minItems: 1, maxItems: 2 })
+  @IsArray()
+  @ArrayMinSize(1, { message: 'A product must be sold stitched, unstitched, or both' })
+  @ArrayMaxSize(2)
+  @ArrayUnique((offer: ProductOfferDto | null | undefined) => offer?.sizing, {
+    message: 'Each form may be priced only once',
   })
-  @IsOptional()
-  @IsInt({ message: 'promotionalPrice must be an integer number of minor units' })
-  @Min(0)
-  promotionalPrice?: number | null;
+  @ValidateNested({ each: true })
+  @Type(() => ProductOfferDto)
+  offers!: ProductOfferDto[];
 
-  /**
-   * Initial on-hand quantity. Present only on create — afterwards stock moves
-   * exclusively through the inventory endpoints, so a catalogue edit can never
-   * overwrite a concurrent sale's decrement.
-   */
-  @ApiPropertyOptional({ description: 'Opening stock', default: 0 })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  stock?: number;
+  /** The colours it comes in, in display order. */
+  @ApiProperty({ type: [ProductVariantDto], minItems: 1, maxItems: MAX_PRODUCT_VARIANTS })
+  @IsArray()
+  @ArrayMinSize(1, { message: 'A product needs at least one colour' })
+  @ArrayMaxSize(MAX_PRODUCT_VARIANTS, {
+    message: `A product may come in at most ${MAX_PRODUCT_VARIANTS} colours`,
+  })
+  @ArrayUnique((variant: ProductVariantDto | null | undefined) => variant?.erpId, {
+    message: 'Each ERP suit may be used by only one colour',
+  })
+  @ArrayUnique(
+    (variant: ProductVariantDto | null | undefined) => variant?.color?.trim().toLowerCase(),
+    { message: 'Each colour may appear only once' },
+  )
+  @ValidateNested({ each: true })
+  @Type(() => ProductVariantDto)
+  variants!: ProductVariantDto[];
 
   /**
    * The top-level category, required. A product sits in one parent and,
@@ -172,41 +242,21 @@ export class CreateProductDto {
   subcategoryId?: string;
 
   /**
-   * The sizes this product is offered in.
+   * The sizes it can be stitched to.
    *
-   * Leave empty for an unstitched piece. `sizing` is derived from this when it
-   * is not stated, so the two can never contradict each other.
+   * Required when a SIZED offer is made, and refused without one — so the
+   * sizes and the offers can never contradict each other.
    */
-  @ApiPropertyOptional({ type: [String], description: 'Size ids, from GET /sizes' })
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Size ids, from GET /sizes. Only with a SIZED offer, which needs at least one',
+  })
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
   @ArrayUnique()
   @IsMongoId({ each: true })
   sizes?: string[];
-
-  @ApiPropertyOptional({
-    enum: ProductSizing,
-    description: 'Derived from `sizes` when omitted: empty means UNSTITCHED',
-  })
-  @IsOptional()
-  @IsEnum(ProductSizing)
-  sizing?: ProductSizing;
-
-  @ApiPropertyOptional({ type: [ProductImageDto], maxItems: MAX_PRODUCT_IMAGES })
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(MAX_PRODUCT_IMAGES, {
-    message: `A product may have at most ${MAX_PRODUCT_IMAGES} images`,
-  })
-  // Uploading the same bytes twice returns the same media id, so without this a
-  // product could show one photograph twice in its gallery.
-  @ArrayUnique((image: ProductImageDto | null | undefined) => image?.mediaId, {
-    message: 'Each image may appear only once',
-  })
-  @ValidateNested({ each: true })
-  @Type(() => ProductImageDto)
-  images?: ProductImageDto[];
 
   @ApiPropertyOptional({ description: 'Stock-keeping unit; the ERP join key' })
   @IsOptional()
@@ -222,14 +272,10 @@ export class CreateProductDto {
 }
 
 /**
- * Every field optional, with `stock` and `erpId` removed outright.
+ * Every field optional. `offers` and `variants`, when sent, replace the whole
+ * list — see `ProductVariantDto` for how colours are matched.
  *
- * `OmitType` strips the validation metadata, not just the TypeScript type — so
- * with `forbidNonWhitelisted` it becomes a 400 rather than a silently accepted
- * key. Adjusting stock is an inventory operation with its own concurrency
- * guarantees, not a catalogue edit; and the suit a product is built on is
- * chosen once, at creation, because moving it would move where its stock lives.
+ * There is no stock here, on a product or on a colour: stock is the ERP's, and
+ * a catalogue edit must never overwrite a concurrent sale's decrement.
  */
-export class UpdateProductDto extends PartialType(
-  OmitType(CreateProductDto, ['stock', 'erpId'] as const),
-) {}
+export class UpdateProductDto extends PartialType(CreateProductDto) {}

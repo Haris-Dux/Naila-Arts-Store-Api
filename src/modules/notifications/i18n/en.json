@@ -6,6 +6,7 @@
     "footerNote": "You're receiving this email because of a recent order or account activity at {{storeName}}.",
     "orderNumber": "Order number",
     "total": "Total",
+    "color": "Colour",
     "size": "Size",
     "product": "Product",
     "quantity": "Qty",

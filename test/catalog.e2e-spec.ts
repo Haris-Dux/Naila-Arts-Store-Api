@@ -1,13 +1,14 @@
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { Category, CategoryDocument } from '../src/modules/categories/schemas/category.schema';
+import { ErpStockSyncService } from '../src/modules/erp/erp-stock-sync.service';
 import { Product, ProductDocument } from '../src/modules/products/schemas/product.schema';
 import { InventoryService } from '../src/modules/inventory/inventory.service';
 import { UserRole } from '../src/modules/users/enums/user-role.enum';
 import { User, UserDocument } from '../src/modules/users/schemas/user.schema';
-import { TestContext, api, createCategory, createTestApp } from './setup-app';
+import { TestContext, api, createCategory, createSuit, createTestApp } from './setup-app';
 
 describe('Catalog & Inventory (e2e)', () => {
   let ctx: TestContext;
@@ -95,11 +96,40 @@ describe('Catalog & Inventory (e2e)', () => {
     return res.body.data.map((m: { id: string }) => m.id);
   };
 
-  const createProduct = (overrides: Record<string, unknown> = {}, token = adminToken) =>
-    request(app.getHttpServer())
-      .post(api('/products'))
-      .set('Authorization', `Bearer ${token}`)
-      .send({ name: 'Wireless Mouse', price: 2499, stock: 10, categoryId, ...overrides });
+  /**
+   * A product in one colour — a fresh suit holding `stock` units, showing
+   * `images` — sold unstitched at `price`. Anything else passes straight
+   * through, `offers` and `variants` included, to replace those defaults.
+   *
+   * Returns just `expect`, like the supertest request it wraps: the suit has to
+   * exist before the request is sent.
+   */
+  const createProduct = (
+    {
+      price = 2499,
+      promotionalPrice,
+      stock = 10,
+      images,
+      ...overrides
+    }: Record<string, unknown> = {},
+    token = adminToken,
+  ) => ({
+    expect: async (status: number) =>
+      request(app.getHttpServer())
+        .post(api('/products'))
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          name: 'Wireless Mouse',
+          categoryId,
+          offers: [{ sizing: 'UNSTITCHED', price, promotionalPrice }],
+          variants: [{ erpId: await createSuit(app, stock as number), color: 'Red', images }],
+          ...overrides,
+        })
+        .expect(status),
+  });
+
+  /** The id of a created product's first colour — what stock is moved by. */
+  const colourOf = (created: request.Response) => created.body.data.variants[0].id as string;
 
   // ------------------------------------------------------------------- A1
 
@@ -108,7 +138,7 @@ describe('Catalog & Inventory (e2e)', () => {
       const created = await createProduct({ stock: 5 }).expect(201);
       const id = created.body.data.id as string;
 
-      await expect(inventory.decrease(id, 6)).rejects.toMatchObject({
+      await expect(inventory.decrease(id, colourOf(created), 6)).rejects.toMatchObject({
         code: 'INSUFFICIENT_STOCK',
       });
 
@@ -123,7 +153,7 @@ describe('Catalog & Inventory (e2e)', () => {
       // 20 simultaneous single-unit decrements against 5 units of stock.
       // The old read-modify-write would lose updates and finish negative.
       const results = await Promise.allSettled(
-        Array.from({ length: 20 }, () => inventory.decrease(id, 1)),
+        Array.from({ length: 20 }, () => inventory.decrease(id, colourOf(created), 1)),
       );
 
       const succeeded = results.filter((r) => r.status === 'fulfilled').length;
@@ -135,6 +165,7 @@ describe('Catalog & Inventory (e2e)', () => {
       const after = await productModel.findById(id).exec();
       expect(after?.stock).toBe(0);
       expect(after?.stock).toBeGreaterThanOrEqual(0);
+      expect(after?.variants[0].stock).toBe(0);
       // Exactly the units actually sold.
       expect(after?.sellCount).toBe(5);
     });
@@ -146,7 +177,7 @@ describe('Catalog & Inventory (e2e)', () => {
       // Four concurrent 3-unit orders against 10 units: three can succeed (9),
       // the fourth cannot be partially filled.
       const results = await Promise.allSettled(
-        Array.from({ length: 4 }, () => inventory.decrease(id, 3)),
+        Array.from({ length: 4 }, () => inventory.decrease(id, colourOf(created), 3)),
       );
 
       const succeeded = results.filter((r) => r.status === 'fulfilled').length;
@@ -157,18 +188,23 @@ describe('Catalog & Inventory (e2e)', () => {
     });
 
     it('reports a missing product distinctly from insufficient stock', async () => {
-      await expect(inventory.decrease('507f1f77bcf86cd799439011', 1)).rejects.toMatchObject({
-        code: 'RESOURCE_NOT_FOUND',
-      });
+      await expect(
+        inventory.decrease('507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012', 1),
+      ).rejects.toMatchObject({ code: 'RESOURCE_NOT_FOUND' });
     });
 
     it('rejects a non-positive quantity', async () => {
       const created = await createProduct().expect(201);
       const id = created.body.data.id as string;
+      const colour = colourOf(created);
 
-      await expect(inventory.decrease(id, 0)).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
-      await expect(inventory.decrease(id, -5)).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
-      await expect(inventory.decrease(id, 1.5)).rejects.toMatchObject({
+      await expect(inventory.decrease(id, colour, 0)).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+      });
+      await expect(inventory.decrease(id, colour, -5)).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+      });
+      await expect(inventory.decrease(id, colour, 1.5)).rejects.toMatchObject({
         code: 'VALIDATION_FAILED',
       });
     });
@@ -177,11 +213,12 @@ describe('Catalog & Inventory (e2e)', () => {
       const created = await createProduct({ stock: 5 }).expect(201);
       const id = created.body.data.id as string;
 
-      await inventory.decrease(id, 3);
-      await inventory.restore(id, 3);
+      await inventory.decrease(id, colourOf(created), 3);
+      await inventory.restore(id, colourOf(created), 3);
 
       const after = await productModel.findById(id).exec();
       expect(after?.stock).toBe(5);
+      expect(after?.variants[0].stock).toBe(5);
       expect(after?.sellCount).toBe(0);
     });
   });
@@ -206,6 +243,189 @@ describe('Catalog & Inventory (e2e)', () => {
     });
   });
 
+  // --------------------------------------------------------------- colours
+
+  describe('colours', () => {
+    /** One colour on a fresh suit holding `stock` units. */
+    const colour = async (color: string, stock = 10) => ({
+      erpId: await createSuit(app, stock, color),
+      color,
+    });
+
+    const editProduct = (id: string, body: Record<string, unknown>) =>
+      request(app.getHttpServer())
+        .patch(api(`/products/${id}`))
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(body);
+
+    it("keeps each colour's stock, and the product's total across them", async () => {
+      const created = await createProduct({
+        variants: [await colour('Red', 4), await colour('Blue', 6)],
+      }).expect(201);
+
+      expect(
+        created.body.data.variants.map((v: { color: string; stock: number }) => [v.color, v.stock]),
+      ).toEqual([
+        ['Red', 4],
+        ['Blue', 6],
+      ]);
+      expect(created.body.data.stock).toBe(10);
+      expect(created.body.data.inStock).toBe(true);
+    });
+
+    it('gives each colour its own photographs, at most eight', async () => {
+      const ids = await uploadImages(9);
+
+      const created = await createProduct({
+        variants: [
+          { ...(await colour('Red')), images: [{ mediaId: ids[0] }] },
+          { ...(await colour('Blue')), images: [{ mediaId: ids[1] }, { mediaId: ids[2] }] },
+        ],
+      }).expect(201);
+
+      const imagesOf = (index: number) =>
+        created.body.data.variants[index].images.map((image: { mediaId: string }) => image.mediaId);
+      expect(imagesOf(0)).toEqual([ids[0]]);
+      expect(imagesOf(1)).toEqual([ids[1], ids[2]]);
+
+      await createProduct({
+        variants: [{ ...(await colour('Green')), images: ids.map((mediaId) => ({ mediaId })) }],
+      }).expect(400);
+    });
+
+    it('refuses a suit or a colour twice in one product', async () => {
+      const suit = await createSuit(app, 5);
+
+      await createProduct({
+        variants: [
+          { erpId: suit, color: 'Red' },
+          { erpId: suit, color: 'Blue' },
+        ],
+      }).expect(400);
+      // Compared without regard to case.
+      await createProduct({ variants: [await colour('Red'), await colour('red')] }).expect(400);
+      await createProduct({ variants: [] }).expect(400);
+    });
+
+    it('refuses a suit another product sells, or one with nothing to sell', async () => {
+      const suit = await createSuit(app, 5);
+      await createProduct({ variants: [{ erpId: suit, color: 'Red' }] }).expect(201);
+
+      const taken = await createProduct({
+        name: 'Another',
+        variants: [{ erpId: suit, color: 'Red' }],
+      }).expect(409);
+      expect(taken.body.message).toMatch(/already used/);
+
+      await createProduct({ variants: [await colour('Empty', 0)] }).expect(400);
+      await createProduct({
+        variants: [{ erpId: '507f1f77bcf86cd799439011', color: 'Gone' }],
+      }).expect(404);
+    });
+
+    it('adds, renames and removes colours on an edit, keeping the ones it keeps', async () => {
+      const red = await colour('Red', 4);
+      const blue = await colour('Blue', 6);
+      const created = await createProduct({ variants: [red, blue] }).expect(201);
+      const id = created.body.data.id as string;
+      const redId = colourOf(created);
+
+      // A sale after the product was listed: the edit must not undo it.
+      await inventory.decrease(id, redId, 1);
+
+      const green = await colour('Green', 2);
+      const edited = await editProduct(id, {
+        variants: [{ erpId: red.erpId, color: 'Crimson' }, green],
+      }).expect(200);
+
+      const variants = edited.body.data.variants;
+      expect(variants.map((v: { color: string }) => v.color)).toEqual(['Crimson', 'Green']);
+      expect(variants[0].id).toBe(redId);
+      expect(variants[0].stock).toBe(3);
+      expect(variants[1].stock).toBe(2);
+      expect(edited.body.data.stock).toBe(5);
+
+      // Blue has left this product, so another may sell it.
+      await createProduct({ name: 'Blue elsewhere', variants: [blue] }).expect(201);
+    });
+
+    it('refuses an edit that would leave the product without a colour', async () => {
+      const created = await createProduct().expect(201);
+
+      await editProduct(created.body.data.id, { variants: [] }).expect(400);
+    });
+
+    it('refuses to add a suit another product already sells', async () => {
+      const first = await createProduct().expect(201);
+      const second = await createProduct({ name: 'Second' }).expect(201);
+
+      await editProduct(second.body.data.id, {
+        variants: [...second.body.data.variants, ...first.body.data.variants].map(
+          (v: { erpId: string; color: string }, index: number) => ({
+            erpId: v.erpId,
+            color: `${v.color} ${index}`,
+          }),
+        ),
+      }).expect(409);
+    });
+
+    describe('a suit id sent in upper case', () => {
+      const upper = (id: string) => id.toUpperCase();
+
+      it('is stored as the ERP reports it, so its stock keeps following the ERP', async () => {
+        const suit = await createSuit(app, 10);
+        const created = await createProduct({
+          variants: [{ erpId: upper(suit), color: 'Red' }],
+        }).expect(201);
+        expect(created.body.data.variants[0].erpId).toBe(suit);
+
+        // The change stream reports the suit's id in lower case.
+        await app.get(ErpStockSyncService).onChange({
+          documentKey: { _id: new Types.ObjectId(suit) },
+          fullDocument: { _id: new Types.ObjectId(suit), quantity: 3 },
+        });
+
+        const stored = await productModel.findById(created.body.data.id).lean().exec();
+        expect(stored?.variants[0].stock).toBe(3);
+        expect(stored?.stock).toBe(3);
+      });
+
+      it('is the same suit as in lower case, so it cannot be a second colour', async () => {
+        const suit = await createSuit(app, 10);
+
+        await createProduct({
+          variants: [
+            { erpId: suit, color: 'Red' },
+            { erpId: upper(suit), color: 'Blue' },
+          ],
+        }).expect(400);
+
+        await createProduct({ variants: [{ erpId: suit, color: 'Red' }] }).expect(201);
+        await createProduct({
+          name: 'Another',
+          variants: [{ erpId: upper(suit), color: 'Red' }],
+        }).expect(409);
+      });
+
+      it('keeps the colour on an edit, with its id and stock', async () => {
+        const created = await createProduct({ stock: 6 }).expect(201);
+        const [variant] = created.body.data.variants;
+        await inventory.decrease(created.body.data.id, variant.id, 2);
+
+        const edited = await editProduct(created.body.data.id, {
+          variants: [{ erpId: upper(variant.erpId), color: 'Crimson' }],
+        }).expect(200);
+
+        expect(edited.body.data.variants[0]).toMatchObject({
+          id: variant.id,
+          erpId: variant.erpId,
+          color: 'Crimson',
+          stock: 4,
+        });
+      });
+    });
+  });
+
   // ------------------------------------------------------------------ B13
 
   describe('images are returned (B13)', () => {
@@ -222,19 +442,20 @@ describe('Catalog & Inventory (e2e)', () => {
         ],
       }).expect(201);
 
-      expect(created.body.data.images).toHaveLength(2);
+      const images = created.body.data.variants[0].images;
+      expect(images).toHaveLength(2);
       // Sorted by position, not insertion order.
-      expect(created.body.data.images[0].mediaId).toBe(a);
-      expect(created.body.data.images[0].alt).toBe('Front');
-      expect(created.body.data.images[0].url).toMatch(/^\/media\//);
+      expect(images[0].mediaId).toBe(a);
+      expect(images[0].alt).toBe('Front');
+      expect(images[0].url).toMatch(/^\/media\//);
 
       const fetched = await request(app.getHttpServer())
         .get(api(`/products/${created.body.data.id}`))
         .expect(200);
-      expect(fetched.body.data.images).toHaveLength(2);
+      expect(fetched.body.data.variants[0].images).toHaveLength(2);
 
       const listed = await request(app.getHttpServer()).get(api('/products')).expect(200);
-      expect(listed.body.data.items[0].images).toHaveLength(2);
+      expect(listed.body.data.items[0].variants[0].images).toHaveLength(2);
     });
   });
 
@@ -254,7 +475,7 @@ describe('Catalog & Inventory (e2e)', () => {
       await request(app.getHttpServer())
         .patch(api(`/products/${id}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ price: 1999 })
+        .send({ offers: [{ sizing: 'UNSTITCHED', price: 1999 }] })
         .expect(200);
 
       // The old catalogue cached list pages for an hour and never invalidated
@@ -262,10 +483,10 @@ describe('Catalog & Inventory (e2e)', () => {
       const single = await request(app.getHttpServer())
         .get(api(`/products/${id}`))
         .expect(200);
-      expect(single.body.data.price.amount).toBe(1999);
+      expect(single.body.data.offers[0].price.amount).toBe(1999);
 
       const list = await request(app.getHttpServer()).get(api('/products')).expect(200);
-      expect(list.body.data.items[0].price.amount).toBe(1999);
+      expect(list.body.data.items[0].offers[0].price.amount).toBe(1999);
     });
 
     it('drops a deleted product from cached listings', async () => {
@@ -305,12 +526,12 @@ describe('Catalog & Inventory (e2e)', () => {
 
       // A change that bypasses the service is invisible until the entry expires —
       // proof the second read came from the cache, not the database.
-      await productModel.updateOne({ _id: id }, { $set: { price: 1 } });
-      expect((await bySlug(slug).expect(200)).body.data.price.amount).toBe(2499);
+      await productModel.updateOne({ _id: id }, { $set: { 'offers.0.price': 1 } });
+      expect((await bySlug(slug).expect(200)).body.data.offers[0].price.amount).toBe(2499);
 
-      await editProduct(id, { price: 1999 });
+      await editProduct(id, { offers: [{ sizing: 'UNSTITCHED', price: 1999 }] });
 
-      expect((await bySlug(slug).expect(200)).body.data.price.amount).toBe(1999);
+      expect((await bySlug(slug).expect(200)).body.data.offers[0].price.amount).toBe(1999);
     });
 
     it('stops serving a cached product page once it is renamed or unpublished', async () => {
@@ -343,6 +564,7 @@ describe('Catalog & Inventory (e2e)', () => {
       const cursor = first.body.data.meta.nextCursor as string;
       const second = await feed(cursor);
       const lastId = second.body.data.items[0].id as string;
+      const lastColour = second.body.data.items[0].variants[0].id as string;
 
       // Behind the service's back: both cached batches must keep what they had.
       await productModel.updateMany({}, { $set: { name: 'Changed Behind The Cache' } });
@@ -351,7 +573,7 @@ describe('Catalog & Inventory (e2e)', () => {
 
       // A stock change through inventory announces itself, which retires every
       // batch — the first page and the one reached by cursor alike.
-      await inventory.decrease(lastId, 1);
+      await inventory.decrease(lastId, lastColour, 1);
       expect((await feed()).body.data.items[0].name).toBe('Changed Behind The Cache');
       const refreshed = (await feed(cursor)).body.data.items[0];
       expect(refreshed.name).toBe('Changed Behind The Cache');
@@ -680,15 +902,15 @@ describe('Catalog & Inventory (e2e)', () => {
     it('stores and returns money as integer minor units', async () => {
       const created = await createProduct({ price: 2499 }).expect(201);
 
-      expect(created.body.data.price).toEqual({
+      expect(created.body.data.offers[0].price).toEqual({
         amount: 2499,
         currency: 'USD',
         formatted: '$24.99',
       });
 
       const stored = await productModel.findById(created.body.data.id).exec();
-      expect(stored?.price).toBe(2499);
-      expect(Number.isInteger(stored?.price)).toBe(true);
+      expect(stored?.offers[0].price).toBe(2499);
+      expect(Number.isInteger(stored?.offers[0].price)).toBe(true);
     });
 
     it('rejects a decimal price', async () => {
@@ -757,8 +979,8 @@ describe('Catalog & Inventory (e2e)', () => {
 
       const res = await lookup([id]).expect(200);
 
-      expect(res.body.data[0].images).toHaveLength(1);
-      expect(res.body.data[0].images[0]).toMatchObject({ mediaId });
+      expect(res.body.data[0].variants[0].images).toHaveLength(1);
+      expect(res.body.data[0].variants[0].images[0]).toMatchObject({ mediaId });
     });
 
     it('answers an empty list with an empty list', async () => {
@@ -903,7 +1125,13 @@ describe('Catalog & Inventory (e2e)', () => {
     beforeEach(async () => {
       await createProduct({ name: 'Wireless Mouse', price: 2499 }).expect(201);
       await createProduct({ name: 'Mechanical Keyboard', price: 7990 }).expect(201);
-      await createProduct({ name: 'Bluetooth Headphones', price: 5950, stock: 0 }).expect(201);
+      // Sold out: a suit with nothing to sell cannot be listed, so its last unit goes.
+      const soldOut = await createProduct({
+        name: 'Bluetooth Headphones',
+        price: 5950,
+        stock: 1,
+      }).expect(201);
+      await inventory.decrease(soldOut.body.data.id, colourOf(soldOut), 1);
     });
 
     it('searches by text', async () => {
