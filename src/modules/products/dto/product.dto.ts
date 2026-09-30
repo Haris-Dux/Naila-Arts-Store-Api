@@ -15,6 +15,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  Matches,
   MaxLength,
   Min,
   ValidateNested,
@@ -93,12 +94,12 @@ export class ProductOfferDto {
 }
 
 /**
- * One colour of the product: an ERP suit, and its photographs.
+ * One colour of the product: an ERP suit, its shade, and its photographs.
  *
  * The suit is what identifies the colour. On an update, an entry whose `erpId`
  * the product already has keeps that colour — its id and its stock — and
- * takes the name and photographs sent; a new `erpId` adds a colour; a colour
- * left out is removed.
+ * takes the name, shade and photographs sent; a new `erpId` adds a colour; a
+ * colour left out is removed.
  */
 export class ProductVariantDto {
   /**
@@ -123,6 +124,14 @@ export class ProductVariantDto {
   @MaxLength(60)
   @Transform(trim)
   color!: string;
+
+  /** The shade of the colour's button in the storefront. Lower-cased, as a colour picker gives it. */
+  @ApiProperty({ example: '#7a1f3d', description: 'The colour’s shade, as #rrggbb' })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.toLowerCase() : (value as string),
+  )
+  @Matches(/^#[0-9a-f]{6}$/, { message: 'hex must be a colour like #7a1f3d' })
+  hex!: string;
 
   @ApiPropertyOptional({ type: [ProductImageDto], maxItems: MAX_PRODUCT_IMAGES })
   @IsOptional()

@@ -133,10 +133,11 @@ list price while a promotion is running orders the storefront by a number nobody
 is being charged.
 
 **A product comes in colours, and each colour is an ERP suit.** `Product.variants[]`
-holds one entry per colour: its name, its suit (`erpId`), a mirror of the suit's
+holds one entry per colour: its name, the shade the admin picked for its
+storefront button (`hex`, `#rrggbb`), its suit (`erpId`), a mirror of the suit's
 stock, and its own photographs. A basket line names the colour by its `id`, and
 the order records it by value. On an edit a colour is matched by its suit, so it
-keeps its id and stock while its name and photographs change.
+keeps its id and stock while its name, shade and photographs change.
 
 **`sellCount` moves only when something is actually sold.** A cancellation or a
 return brings it back down — those units never left. A supplier delivery does

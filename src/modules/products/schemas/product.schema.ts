@@ -104,6 +104,10 @@ export class ProductVariant {
   @Prop({ required: true, trim: true })
   color!: string;
 
+  /** The shade the admin picked — `#rrggbb` — that the storefront's colour button is filled with. */
+  @Prop({ required: true })
+  hex!: string;
+
   /**
    * The ERP suit this colour is — a `suits._id`. Chosen when the colour is
    * added and never changed afterwards: moving it would move where the

@@ -517,8 +517,8 @@ export class ProductsService {
    * The colours a write leaves the product with, in the order they were sent.
    *
    * A colour is its ERP suit. One the product already has keeps its id, its
-   * stock and when it was linked, and takes the name and photographs sent; a
-   * new suit is checked and brings its stock with it. Every photograph must
+   * stock and when it was linked, and takes the name, shade and photographs
+   * sent; a new suit is checked and brings its stock with it. Every photograph must
    * resolve before anything is written, so the catalogue can never point at a
    * file that is not there.
    */
@@ -537,6 +537,7 @@ export class ProductsService {
       resolved.push({
         _id: kept?._id ?? new Types.ObjectId(),
         color: variant.color,
+        hex: variant.hex,
         erpId: variant.erpId,
         erpSyncedAt: kept?.erpSyncedAt ?? new Date(),
         // A new colour starts with its suit's stock; from there on the ERP owns

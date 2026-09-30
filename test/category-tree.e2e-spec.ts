@@ -106,7 +106,7 @@ describe('Category tree (e2e)', () => {
         .send({
           name: 'Wireless Mouse',
           offers: [{ sizing: 'UNSTITCHED', price: 2499 }],
-          variants: [{ erpId: await createSuit(app, 10), color: 'Red' }],
+          variants: [{ erpId: await createSuit(app, 10), color: 'Red', hex: '#b22222' }],
           ...body,
         })
         .expect(status),

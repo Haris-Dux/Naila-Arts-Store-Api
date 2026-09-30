@@ -84,7 +84,7 @@ describe('Orders & Checkout (e2e)', () => {
         name: 'Wireless Mouse',
         categoryId,
         offers: [{ sizing: 'UNSTITCHED', price }],
-        variants: [{ erpId: await createSuit(app, stock as number), color: 'Red' }],
+        variants: [{ erpId: await createSuit(app, stock as number), color: 'Red', hex: '#b22222' }],
         ...overrides,
       })
       .expect(201);
@@ -866,7 +866,7 @@ describe('Orders & Checkout (e2e)', () => {
         .send({
           name: 'Renamed Product',
           offers: [{ sizing: 'UNSTITCHED', price: 9999 }],
-          variants: [{ erpId: stored!.variants[0].erpId, color: 'Crimson' }],
+          variants: [{ erpId: stored!.variants[0].erpId, color: 'Crimson', hex: '#dc143c' }],
         })
         .expect(200);
 

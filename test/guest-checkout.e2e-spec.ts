@@ -113,7 +113,7 @@ describe('Guest checkout, two roles, and COD (e2e)', () => {
         name: 'Wireless Mouse',
         categoryId,
         offers: [{ sizing: 'UNSTITCHED', price: 2499 }],
-        variants: [{ erpId: await createSuit(app, 20), color: 'Red' }],
+        variants: [{ erpId: await createSuit(app, 20), color: 'Red', hex: '#b22222' }],
       })
       .expect(201);
     productId = product.body.data.id as string;

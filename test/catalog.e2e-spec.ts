@@ -122,7 +122,9 @@ describe('Catalog & Inventory (e2e)', () => {
           name: 'Wireless Mouse',
           categoryId,
           offers: [{ sizing: 'UNSTITCHED', price, promotionalPrice }],
-          variants: [{ erpId: await createSuit(app, stock as number), color: 'Red', images }],
+          variants: [
+            { erpId: await createSuit(app, stock as number), color: 'Red', hex: '#b22222', images },
+          ],
           ...overrides,
         })
         .expect(status),
@@ -247,9 +249,10 @@ describe('Catalog & Inventory (e2e)', () => {
 
   describe('colours', () => {
     /** One colour on a fresh suit holding `stock` units. */
-    const colour = async (color: string, stock = 10) => ({
+    const colour = async (color: string, stock = 10, hex = '#b22222') => ({
       erpId: await createSuit(app, stock, color),
       color,
+      hex,
     });
 
     const editProduct = (id: string, body: Record<string, unknown>) =>
@@ -298,8 +301,8 @@ describe('Catalog & Inventory (e2e)', () => {
 
       await createProduct({
         variants: [
-          { erpId: suit, color: 'Red' },
-          { erpId: suit, color: 'Blue' },
+          { erpId: suit, color: 'Red', hex: '#b22222' },
+          { erpId: suit, color: 'Blue', hex: '#1f3a93' },
         ],
       }).expect(400);
       // Compared without regard to case.
@@ -309,17 +312,19 @@ describe('Catalog & Inventory (e2e)', () => {
 
     it('refuses a suit another product sells, or one with nothing to sell', async () => {
       const suit = await createSuit(app, 5);
-      await createProduct({ variants: [{ erpId: suit, color: 'Red' }] }).expect(201);
+      await createProduct({ variants: [{ erpId: suit, color: 'Red', hex: '#b22222' }] }).expect(
+        201,
+      );
 
       const taken = await createProduct({
         name: 'Another',
-        variants: [{ erpId: suit, color: 'Red' }],
+        variants: [{ erpId: suit, color: 'Red', hex: '#b22222' }],
       }).expect(409);
       expect(taken.body.message).toMatch(/already used/);
 
       await createProduct({ variants: [await colour('Empty', 0)] }).expect(400);
       await createProduct({
-        variants: [{ erpId: '507f1f77bcf86cd799439011', color: 'Gone' }],
+        variants: [{ erpId: '507f1f77bcf86cd799439011', color: 'Gone', hex: '#555555' }],
       }).expect(404);
     });
 
@@ -335,11 +340,12 @@ describe('Catalog & Inventory (e2e)', () => {
 
       const green = await colour('Green', 2);
       const edited = await editProduct(id, {
-        variants: [{ erpId: red.erpId, color: 'Crimson' }, green],
+        variants: [{ erpId: red.erpId, color: 'Crimson', hex: '#dc143c' }, green],
       }).expect(200);
 
       const variants = edited.body.data.variants;
       expect(variants.map((v: { color: string }) => v.color)).toEqual(['Crimson', 'Green']);
+      expect(variants[0].hex).toBe('#dc143c');
       expect(variants[0].id).toBe(redId);
       expect(variants[0].stock).toBe(3);
       expect(variants[1].stock).toBe(2);
@@ -361,12 +367,34 @@ describe('Catalog & Inventory (e2e)', () => {
 
       await editProduct(second.body.data.id, {
         variants: [...second.body.data.variants, ...first.body.data.variants].map(
-          (v: { erpId: string; color: string }, index: number) => ({
+          (v: { erpId: string; color: string; hex: string }, index: number) => ({
             erpId: v.erpId,
             color: `${v.color} ${index}`,
+            hex: v.hex,
           }),
         ),
       }).expect(409);
+    });
+
+    it('keeps the shade the admin picked for each colour, in lower case', async () => {
+      const created = await createProduct({
+        variants: [await colour('Maroon', 5, '#7A1F3D'), await colour('Ivory', 5, '#fffff0')],
+      }).expect(201);
+
+      expect(created.body.data.variants.map((v: { hex: string }) => v.hex)).toEqual([
+        '#7a1f3d',
+        '#fffff0',
+      ]);
+    });
+
+    it('refuses a colour without a shade, or with one that is not #rrggbb', async () => {
+      const { erpId } = await colour('Red');
+
+      await createProduct({ variants: [{ erpId, color: 'Red' }] }).expect(400);
+      for (const hex of ['red', '#fff', '7a1f3d', '#7a1f3dff']) {
+        const res = await createProduct({ variants: [{ erpId, color: 'Red', hex }] }).expect(400);
+        expect(JSON.stringify(res.body)).toMatch(/#7a1f3d/);
+      }
     });
 
     describe('a suit id sent in upper case', () => {
@@ -375,7 +403,7 @@ describe('Catalog & Inventory (e2e)', () => {
       it('is stored as the ERP reports it, so its stock keeps following the ERP', async () => {
         const suit = await createSuit(app, 10);
         const created = await createProduct({
-          variants: [{ erpId: upper(suit), color: 'Red' }],
+          variants: [{ erpId: upper(suit), color: 'Red', hex: '#b22222' }],
         }).expect(201);
         expect(created.body.data.variants[0].erpId).toBe(suit);
 
@@ -395,15 +423,17 @@ describe('Catalog & Inventory (e2e)', () => {
 
         await createProduct({
           variants: [
-            { erpId: suit, color: 'Red' },
-            { erpId: upper(suit), color: 'Blue' },
+            { erpId: suit, color: 'Red', hex: '#b22222' },
+            { erpId: upper(suit), color: 'Blue', hex: '#1f3a93' },
           ],
         }).expect(400);
 
-        await createProduct({ variants: [{ erpId: suit, color: 'Red' }] }).expect(201);
+        await createProduct({ variants: [{ erpId: suit, color: 'Red', hex: '#b22222' }] }).expect(
+          201,
+        );
         await createProduct({
           name: 'Another',
-          variants: [{ erpId: upper(suit), color: 'Red' }],
+          variants: [{ erpId: upper(suit), color: 'Red', hex: '#b22222' }],
         }).expect(409);
       });
 
@@ -413,7 +443,7 @@ describe('Catalog & Inventory (e2e)', () => {
         await inventory.decrease(created.body.data.id, variant.id, 2);
 
         const edited = await editProduct(created.body.data.id, {
-          variants: [{ erpId: upper(variant.erpId), color: 'Crimson' }],
+          variants: [{ erpId: upper(variant.erpId), color: 'Crimson', hex: '#dc143c' }],
         }).expect(200);
 
         expect(edited.body.data.variants[0]).toMatchObject({

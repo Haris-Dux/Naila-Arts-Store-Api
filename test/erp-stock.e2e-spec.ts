@@ -113,6 +113,7 @@ describe('ERP stock (e2e)', () => {
         variants: suitIds.map((erpId, index) => ({
           erpId: erpId.toString(),
           color: `Colour ${index + 1}`,
+          hex: '#2f4f4f',
         })),
         ...extra,
       });
@@ -535,7 +536,7 @@ describe('ERP stock (e2e)', () => {
       const other = await makeDesign(7, '871', 'Lawn', 'Blue');
       await createOn([other], { stock: 99 }).expect(400);
       await createOn([], {
-        variants: [{ erpId: other.toString(), color: 'Blue', stock: 99 }],
+        variants: [{ erpId: other.toString(), color: 'Blue', hex: '#1f3a93', stock: 99 }],
       }).expect(400);
     });
 
@@ -577,7 +578,7 @@ describe('ERP stock (e2e)', () => {
       await edit({ erpId: other.toString() }).expect(400);
 
       const swapped = await edit({
-        variants: [{ erpId: other.toString(), color: 'Colour 1' }],
+        variants: [{ erpId: other.toString(), color: 'Colour 1', hex: '#2f4f4f' }],
       }).expect(200);
       expect(swapped.body.data.variants[0].id).not.toBe(created.body.data.variants[0].id);
       expect(swapped.body.data.variants[0].stock).toBe(4);

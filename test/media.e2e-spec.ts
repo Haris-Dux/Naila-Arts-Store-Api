@@ -136,7 +136,7 @@ describe('Media (e2e)', () => {
           name: 'Lawn Suit',
           categoryId,
           offers: [{ sizing: 'UNSTITCHED', price: 4999 }],
-          variants: [{ erpId: await createSuit(app, 10), color: 'Red', images }],
+          variants: [{ erpId: await createSuit(app, 10), color: 'Red', hex: '#b22222', images }],
           ...body,
         })
         .expect(status),
@@ -346,12 +346,12 @@ describe('Media (e2e)', () => {
     it("replaces a colour's image list on update", async () => {
       const [a, b] = await upload(2);
       const created = await makeProduct({ images: [{ mediaId: a }] }).expect(201);
-      const { erpId, color } = created.body.data.variants[0];
+      const { erpId, color, hex } = created.body.data.variants[0];
 
       const updated = await request(app.getHttpServer())
         .patch(api(`/products/${created.body.data.id as string}`))
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ variants: [{ erpId, color, images: [{ mediaId: b, alt: 'Only one now' }] }] })
+        .send({ variants: [{ erpId, color, hex, images: [{ mediaId: b, alt: 'Only one now' }] }] })
         .expect(200);
 
       const images = updated.body.data.variants[0].images;

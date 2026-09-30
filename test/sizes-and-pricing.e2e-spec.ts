@@ -135,7 +135,7 @@ describe('Sizes, promotions and units sold (e2e)', () => {
             },
           ],
           ...(sizes ? { sizes } : {}),
-          variants: [{ erpId: await createSuit(app, 20), color: 'Red' }],
+          variants: [{ erpId: await createSuit(app, 20), color: 'Red', hex: '#b22222' }],
           ...body,
         })
         .expect(status),
@@ -438,8 +438,8 @@ describe('Sizes, promotions and units sold (e2e)', () => {
       const blue = await createSuit(app, 7, 'Blue');
       const created = await postProduct({
         variants: [
-          { erpId: red, color: 'Red' },
-          { erpId: blue, color: 'Blue' },
+          { erpId: red, color: 'Red', hex: '#b22222' },
+          { erpId: blue, color: 'Blue', hex: '#1f3a93' },
         ],
       }).expect(201);
       const id = created.body.data.id as string;

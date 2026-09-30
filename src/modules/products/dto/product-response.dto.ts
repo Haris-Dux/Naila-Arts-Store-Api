@@ -45,6 +45,8 @@ export class ProductVariantResponseDto {
   /** What a basket line and an order line send as `variantId`. */
   @ApiProperty() id!: string;
   @ApiProperty() color!: string;
+  /** The shade to fill this colour's button with, as `#rrggbb`. */
+  @ApiProperty({ example: '#7a1f3d' }) hex!: string;
   /** The ERP suit this colour is; its stock lives there. */
   @ApiProperty() erpId!: string;
   @ApiProperty({ description: 'Units on hand in this colour' }) stock!: number;
@@ -114,6 +116,7 @@ export class ProductResponseDto {
       variants: product.variants.map((variant) => ({
         id: variant._id.toString(),
         color: variant.color,
+        hex: variant.hex,
         erpId: variant.erpId,
         stock: variant.stock,
         inStock: variant.stock > 0,

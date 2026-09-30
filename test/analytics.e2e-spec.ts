@@ -75,7 +75,7 @@ describe('Analytics (e2e)', () => {
         name,
         categoryId: category,
         offers: [{ sizing: 'UNSTITCHED', price }],
-        variants: [{ erpId: await createSuit(app, stock), color: 'Red' }],
+        variants: [{ erpId: await createSuit(app, stock), color: 'Red', hex: '#b22222' }],
       })
       .expect(201);
     colours.set(res.body.data.id as string, res.body.data.variants[0].id as string);
