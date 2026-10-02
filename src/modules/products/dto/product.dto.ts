@@ -267,6 +267,16 @@ export class CreateProductDto {
   @IsMongoId({ each: true })
   sizes?: string[];
 
+  /** Refused without a SIZED offer, like `sizes`. */
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    description: 'Size chart id, from GET /size-charts. Only with a SIZED offer; null removes it',
+  })
+  @IsOptional()
+  @IsMongoId()
+  sizeChartId?: string | null;
+
   @ApiPropertyOptional({ description: 'Stock-keeping unit; the ERP join key' })
   @IsOptional()
   @IsString()

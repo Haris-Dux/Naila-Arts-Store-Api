@@ -10,6 +10,7 @@ import {
 } from '../../common/exceptions/domain.exception';
 import { notDeleted } from '../../common/schemas/base.schema';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
+import { SizeChart, SizeChartDocument } from '../size-charts/schemas/size-chart.schema';
 import { CreateSizeDto, SizeResponseDto, UpdateSizeDto } from './dto/size.dto';
 import { Size, SizeDocument } from './schemas/size.schema';
 
@@ -25,6 +26,7 @@ export class SizesService {
   constructor(
     @InjectModel(Size.name) private readonly sizeModel: Model<SizeDocument>,
     @InjectModel(Product.name) private readonly productModel: Model<ProductDocument>,
+    @InjectModel(SizeChart.name) private readonly sizeChartModel: Model<SizeChartDocument>,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -82,11 +84,11 @@ export class SizesService {
   }
 
   /**
-   * Soft delete, refused while products still offer it.
+   * Soft delete, refused while products still offer it or size charts list it.
    *
    * Same reasoning as a category in use: a product listing a size that no longer
-   * resolves would render an unselectable option, and an order already placed in
-   * that size keeps its own snapshot regardless.
+   * resolves would render an unselectable option, and a chart a row it cannot
+   * name. An order already placed in that size keeps its own snapshot regardless.
    */
   async remove(id: string): Promise<void> {
     const size = await this.getDocumentOrThrow(id);
@@ -95,6 +97,16 @@ export class SizesService {
     if (inUse > 0) {
       throw new ConflictException(
         `Cannot delete a size offered by ${inUse} product(s); remove it from them first`,
+      );
+    }
+
+    const charted = await this.sizeChartModel.countDocuments({
+      'rows.sizeId': size._id,
+      ...notDeleted,
+    });
+    if (charted > 0) {
+      throw new ConflictException(
+        `Cannot delete a size used by ${charted} size chart(s); remove it from them first`,
       );
     }
 

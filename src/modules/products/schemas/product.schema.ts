@@ -229,6 +229,13 @@ export class Product extends BaseSchemaClass {
   @Prop({ type: [MongooseSchema.Types.ObjectId], ref: 'Size', default: [] })
   sizes!: Types.ObjectId[];
 
+  /**
+   * The size chart shown with it. Only on a product sold stitched — a chart
+   * gives the measurements a stitched piece is cut to — and optional even then.
+   */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'SizeChart', default: null })
+  sizeChartId!: Types.ObjectId | null;
+
   @Prop({ type: ProductRatingSchema, default: () => ({ average: 0, count: 0 }) })
   rating!: ProductRating;
 

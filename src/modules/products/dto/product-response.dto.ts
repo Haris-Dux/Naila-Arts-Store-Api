@@ -76,6 +76,8 @@ export class ProductResponseDto {
   /** The colours it comes in, in display order, each with its own photographs. */
   @ApiProperty({ type: [ProductVariantResponseDto] }) variants!: ProductVariantResponseDto[];
   @ApiProperty({ type: [ProductSizeResponseDto] }) sizes!: ProductSizeResponseDto[];
+  /** Read with GET /size-charts/:id. Only ever set on a product sold stitched. */
+  @ApiPropertyOptional({ type: String, nullable: true }) sizeChartId!: string | null;
   @ApiProperty() rating!: { average: number; count: number };
   @ApiProperty() sellCount!: number;
   @ApiProperty() isActive!: boolean;
@@ -125,6 +127,7 @@ export class ProductResponseDto {
       // Populated when the caller asked for it; ids alone otherwise, so a list
       // page does not silently fan out into a lookup per product.
       sizes: sizes ?? product.sizes.map((id) => ({ id: id.toString(), name: null, code: null })),
+      sizeChartId: product.sizeChartId ? product.sizeChartId.toString() : null,
       rating: { average: product.rating.average, count: product.rating.count },
       sellCount: product.sellCount,
       isActive: product.isActive,

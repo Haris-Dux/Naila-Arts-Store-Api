@@ -4,6 +4,7 @@ import { CategoriesModule } from '../categories/categories.module';
 import { Suit, SuitSchema } from '../erp/schemas/suit.schema';
 import { MediaModule } from '../media/media.module';
 import { SizesModule } from '../sizes/sizes.module';
+import { SizeChartsModule } from '../size-charts/size-charts.module';
 import { CatalogCacheService } from './catalog-cache.service';
 import { ProductCacheListener } from './product-cache.listener';
 import { ProductsController } from './products.controller';
@@ -15,8 +16,9 @@ import { Product, ProductSchema } from './schemas/product.schema';
  *
  * Split out from categories, which are now their own module with their own
  * routes and their own lifecycle. Products depend on categories (a product must
- * name a real branch) and on sizes (it must offer real ones); neither depends
- * back, so the direction is one-way and the graph stays acyclic.
+ * name a real branch), on sizes (it must offer real ones) and on size charts (it
+ * must show a real one); none depends back, so the direction is one-way and the
+ * graph stays acyclic.
  */
 @Module({
   imports: [
@@ -28,6 +30,8 @@ import { Product, ProductSchema } from './schemas/product.schema';
     ]),
     CategoriesModule,
     SizesModule,
+    // Refuses a size chart that does not exist.
+    SizeChartsModule,
     // Resolves a product's image references, and refuses one that does not exist.
     MediaModule,
   ],

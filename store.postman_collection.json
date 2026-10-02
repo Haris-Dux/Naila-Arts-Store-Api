@@ -515,7 +515,7 @@
                 "{{productSlug}}"
               ]
             },
-            "description": "The same product, looked up by the `slug` in its page URL — what a product page loads.\n\n**Auth:** none.\n**Notable fields:**\n- `description` is rich text (HTML, already sanitised by the server) — render it as HTML.\n- `videoUrl` links a video of the product, and `videoPlatform` says where it is — `FACEBOOK` or `YOUTUBE` — so you can embed the right player. Both are null when the product has no video.\n- `offers` lists the forms it is sold in, each at its own price: `SIZED` is stitched to one of `sizes`, `UNSTITCHED` needs no size.\n- `variants` are its colours, each with its own `images` and a `hex` shade for its colour button; a colour's `inStock` and `stock` say whether it can be bought in that colour."
+            "description": "The same product, looked up by the `slug` in its page URL — what a product page loads.\n\n**Auth:** none.\n**Notable fields:**\n- `description` is rich text (HTML, already sanitised by the server) — render it as HTML.\n- `videoUrl` links a video of the product, and `videoPlatform` says where it is — `FACEBOOK` or `YOUTUBE` — so you can embed the right player. Both are null when the product has no video.\n- `offers` lists the forms it is sold in, each at its own price: `SIZED` is stitched to one of `sizes`, `UNSTITCHED` needs no size.\n- `sizeChartId` names the size chart to show beside the sizes — read it with **Get size chart**. Null when there is none, and always null on a product not sold stitched.\n- `variants` are its colours, each with its own `images` and a `hex` shade for its colour button; a colour's `inStock` and `stock` say whether it can be bought in that colour."
           },
           "event": [
             {
@@ -524,7 +524,41 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200', () => pm.response.to.have.status(200));",
-                  "pm.test('the same product', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('productId')));"
+                  "pm.test('the same product', () => pm.expect(pm.response.json().data.id).to.eql(pm.collectionVariables.get('productId')));",
+                  "if (pm.response.json().data.sizeChartId) pm.collectionVariables.set('sizeChartId', pm.response.json().data.sizeChartId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get size chart",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/size-charts/{{sizeChartId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "size-charts",
+                "{{sizeChartId}}"
+              ]
+            },
+            "description": "The size chart a stitched product shows — the `sizeChartId` from **Get product by slug**. Load it when the shopper opens the size chart.\n\n**Auth:** none. An unknown id is a 404.\n**Returns:**\n- `name` — the chart's heading, e.g. `Polawn`; `note` — printed under it, e.g. `All mentioned sizes in inches` (may be null).\n- `measurements` — the columns, each `{ key, label, group }`. Print the `SHIRT` group as one table and the `TROUSER` group as another, each column headed by its `label`.\n- `rows` — one per size, in display order: `size` (`code`, `name`) and `values`, one number per measurement, in the same order as `measurements`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('one value per measurement in every row', () => {",
+                  "  const chart = pm.response.json().data;",
+                  "  chart.rows.forEach((row) => pm.expect(row.values).to.have.length(chart.measurements.length));",
+                  "});"
                 ]
               }
             }
@@ -1734,6 +1768,10 @@
     },
     {
       "key": "productSlug",
+      "value": ""
+    },
+    {
+      "key": "sizeChartId",
       "value": ""
     },
     {

@@ -16,6 +16,7 @@ import { MediaService } from '../media/media.service';
 import { CatalogCacheService } from './catalog-cache.service';
 import { CategoriesService, CategoryPlacement } from '../categories/categories.service';
 import { SizesService } from '../sizes/sizes.service';
+import { SizeChartsService } from '../size-charts/size-charts.service';
 import { ListProductsDto } from './dto/list-products.dto';
 import { ProductResponseDto, ProductSizeResponseDto } from './dto/product-response.dto';
 import {
@@ -56,6 +57,7 @@ export class ProductsService {
     private readonly cache: CatalogCacheService,
     private readonly categories: CategoriesService,
     private readonly sizes: SizesService,
+    private readonly sizeCharts: SizeChartsService,
     private readonly media: MediaService,
     config: ConfigService,
   ) {
@@ -247,6 +249,7 @@ export class ProductsService {
       categoryId: placement.categoryId,
       subcategoryId: placement.subcategoryId,
       sizes: sizeIds,
+      sizeChartId: await this.resolveSizeChart(dto.sizeChartId ?? null, offers),
       sku: dto.sku ?? null,
       isActive: dto.isActive ?? true,
     });
@@ -307,6 +310,16 @@ export class ProductsService {
             product.offers = offers;
             product.effectivePrice = ProductsService.lowestPrice(offers);
           }
+        }
+        // Judged from the merged state as well: the chart has to go when the
+        // stitched offer does, or the edit is refused.
+        if (dto.offers !== undefined || dto.sizeChartId !== undefined) {
+          product.sizeChartId = await this.resolveSizeChart(
+            dto.sizeChartId !== undefined
+              ? dto.sizeChartId
+              : (product.sizeChartId?.toString() ?? null),
+            product.offers,
+          );
         }
         const placement = await this.resolvePlacement(product, dto);
         if (placement) {
@@ -511,6 +524,26 @@ export class ProductsService {
 
     // Stored in the merchant's display order, not the order the ids arrived in.
     return resolved.map((size) => size.id);
+  }
+
+  /**
+   * The size chart a product shows, if any.
+   *
+   * Only a product sold stitched may have one, for the same reason as `sizes`,
+   * and it must exist — a product must not point at a chart that is not there.
+   */
+  private async resolveSizeChart(
+    sizeChartId: string | null,
+    offers: ProductOffer[],
+  ): Promise<Types.ObjectId | null> {
+    if (!sizeChartId) return null;
+
+    if (!offers.some((offer) => offer.sizing === ProductSizing.SIZED)) {
+      throw new ValidationFailedException('Only a product sold stitched can have a size chart');
+    }
+    await this.sizeCharts.assertExists(sizeChartId);
+
+    return new Types.ObjectId(sizeChartId);
   }
 
   /**

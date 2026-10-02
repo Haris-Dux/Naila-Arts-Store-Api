@@ -13,6 +13,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CategoriesModule } from './modules/categories/categories.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SizesModule } from './modules/sizes/sizes.module';
+import { SizeChartsModule } from './modules/size-charts/size-charts.module';
 import { StoreModule } from './modules/store/store.module';
 import { ContentModule } from './modules/content/content.module';
 import { ErpModule } from './modules/erp/erp.module';
@@ -61,6 +62,7 @@ import { ThrottlingModule } from './throttling/throttling.module';
     MediaModule,
     CategoriesModule,
     SizesModule,
+    SizeChartsModule,
     ProductsModule,
     ContentModule,
     InventoryModule,
